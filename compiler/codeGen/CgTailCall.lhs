@@ -46,6 +46,7 @@ import Outputable
 import StaticFlags
 
 import Control.Monad
+import Data.Maybe
 
 -----------------------------------------------------------------------------
 -- Tail Calls
@@ -104,17 +105,19 @@ performTailCall fun_info arg_amodes pending_assts
 	   -- to make the heap check easier.  The tail-call sequence
 	   -- is very similar to returning an unboxed tuple, so we
 	   -- share some code.
-     do	{ (final_sp, arg_assts) <- pushUnboxedTuple join_sp arg_amodes
+     do	{ (final_sp, arg_assts, live) <- pushUnboxedTuple join_sp arg_amodes
 	; emitSimultaneously (pending_assts `plusStmts` arg_assts)
 	; let lbl = enterReturnPtLabel (idUnique (cgIdInfoId fun_info))
-	; doFinalJump final_sp True {- Is LNE -} (jumpToLbl lbl) }
+	; doFinalJump final_sp True $ jumpToLbl lbl (Just live) }
 
   | otherwise
   = do 	{ fun_amode <- idInfoToAmode fun_info
 	; let assignSt  = CmmAssign nodeReg fun_amode
               node_asst = oneStmt assignSt
-	      opt_node_asst | nodeMustPointToIt lf_info = node_asst
-			    | otherwise		        = noStmts
+              node_live = Just [node]
+	      (opt_node_asst, opt_node_live)
+                      | nodeMustPointToIt lf_info = (node_asst, node_live)
+                      | otherwise                 = (noStmts, Just [])
 	; EndOfBlockInfo sp _ <- getEndOfBlockInfo
 
 	; dflags <- getDynFlags
@@ -123,8 +126,8 @@ performTailCall fun_info arg_amodes pending_assts
 	    -- Node must always point to things we enter
 	    EnterIt -> do
 		{ emitSimultaneously (node_asst `plusStmts` pending_assts) 
-		; let target     = entryCode (closureInfoPtr (CmmReg nodeReg))
-                      enterClosure = stmtC (CmmJump target [])
+		; let target       = entryCode (closureInfoPtr (CmmReg nodeReg))
+                      enterClosure = stmtC (CmmJump target node_live)
                       -- If this is a scrutinee
                       -- let's check if the closure is a constructor
                       -- so we can directly jump to the alternatives switch
@@ -138,18 +141,18 @@ performTailCall fun_info arg_amodes pending_assts
 	    -- As with any return, Node must point to it.
 	    ReturnIt -> do
 		{ emitSimultaneously (node_asst `plusStmts` pending_assts)
-		; doFinalJump sp False emitReturnInstr }
+		; doFinalJump sp False $ emitReturnInstr node_live }
     
 	    -- A real constructor.  Don't bother entering it, 
 	    -- just do the right sort of return instead.
 	    -- As with any return, Node must point to it.
 	    ReturnCon _ -> do
 		{ emitSimultaneously (node_asst `plusStmts` pending_assts)
-		; doFinalJump sp False emitReturnInstr }
+		; doFinalJump sp False $ emitReturnInstr node_live }
 
 	    JumpToIt lbl -> do
 		{ emitSimultaneously (opt_node_asst `plusStmts` pending_assts)
-		; doFinalJump sp False (jumpToLbl lbl) }
+		; doFinalJump sp False $ jumpToLbl lbl opt_node_live }
     
 	    -- A slow function call via the RTS apply routines
 	    -- Node must definitely point to the thing
@@ -164,7 +167,7 @@ performTailCall fun_info arg_amodes pending_assts
 		; let (apply_lbl, args, extra_args) 
 			= constructSlowCall arg_amodes
 
-		; directCall sp apply_lbl args extra_args 
+		; directCall sp apply_lbl args extra_args node_live
 			(node_asst `plusStmts` pending_assts)
 
 		}
@@ -180,7 +183,7 @@ performTailCall fun_info arg_amodes pending_assts
 		     -- The args beyond the arity go straight on the stack
 		     (arity_args, extra_args) = splitAt arity arg_amodes
      
-		; directCall sp lbl arity_args extra_args
+		; directCall sp lbl arity_args extra_args opt_node_live
 			(opt_node_asst `plusStmts` pending_assts)
 	        }
 	}
@@ -204,7 +207,8 @@ performTailCall fun_info arg_amodes pending_assts
                    -- No, enter the closure.
                    ; enterClosure
                    ; labelC is_constr
-                   ; stmtC (CmmJump (entryCode $ CmmLit (CmmLabel lbl)) [])
+                   ; stmtC (CmmJump (entryCode $
+                               CmmLit (CmmLabel lbl)) (Just [node]))
                    }
 {-
               -- This is a scrutinee for a case expression
@@ -219,7 +223,7 @@ performTailCall fun_info arg_amodes pending_assts
                    ; stmtC (CmmCondBranch (cond1 tag) no_cons)
                    ; stmtC (CmmCondBranch (cond2 tag) no_cons)
                    -- Yes, jump to switch statement
-                   ; stmtC (CmmJump (CmmLit (CmmLabel lbl)) [])
+                   ; stmtC (CmmJump (CmmLit (CmmLabel lbl)))
                    ; labelC no_cons
                    -- No, enter the closure.
                    ; enterClosure
@@ -244,9 +248,9 @@ performTailCall fun_info arg_amodes pending_assts
 -}
 
 directCall :: VirtualSpOffset -> CLabel -> [(CgRep, CmmExpr)]
-           -> [(CgRep, CmmExpr)] -> CmmStmts
+           -> [(CgRep, CmmExpr)] -> Maybe [GlobalReg] -> CmmStmts
            -> Code
-directCall sp lbl args extra_args assts = do
+directCall sp lbl args extra_args live_node assts = do
   let
 	-- First chunk of args go in registers
 	(reg_arg_amodes, stk_args) = assignCallRegs args
@@ -256,14 +260,12 @@ directCall sp lbl args extra_args assts = do
 	slow_stk_args = slowArgs extra_args
 
 	reg_assts = assignToRegs reg_arg_amodes
+        live_args = map snd reg_arg_amodes
+        live_regs = Just $ (fromMaybe [] live_node) ++ live_args
   --
   (final_sp, stk_assts) <- mkStkAmodes sp (stk_args ++ slow_stk_args)
-
-  emitSimultaneously (reg_assts     `plusStmts`
-		      stk_assts     `plusStmts`
-		      assts)
-
-  doFinalJump final_sp False (jumpToLbl lbl)
+  emitSimultaneously $ reg_assts `plusStmts` stk_assts `plusStmts` assts
+  doFinalJump final_sp False $ jumpToLbl lbl live_regs
 
 -- -----------------------------------------------------------------------------
 -- The final clean-up before we do a jump at the end of a basic block.
@@ -297,42 +299,61 @@ performReturn :: Code	-- The code to execute to actually do the return
 
 performReturn finish_code
   = do  { EndOfBlockInfo args_sp _sequel <- getEndOfBlockInfo
-	; doFinalJump args_sp False{-not a LNE-} finish_code }
+	; doFinalJump args_sp False finish_code }
 
 -- ----------------------------------------------------------------------------
 -- Primitive Returns
 -- Just load the return value into the right register, and return.
 
-performPrimReturn :: CgRep -> CmmExpr	-- The thing to return
-		  -> Code
+performPrimReturn :: CgRep -> CmmExpr -> Code
 performPrimReturn rep@(VecArg {}) amode = 
-  returnVector rep amode
+  returnVector (rep, amode)
 
-performPrimReturn rep amode
-  =  do { whenC (not (isVoidArg rep))
-		(stmtC (CmmAssign ret_reg amode))
-	; performReturn emitReturnInstr }
+-- non-void return value
+performPrimReturn rep amode | not (isVoidArg rep)
+  = do { stmtC (CmmAssign ret_reg amode)
+       ; performReturn $ emitReturnInstr live_regs }
   where
-    ret_reg = dataReturnConvPrim rep
+    -- careful here as 'dataReturnConvPrim' will panic if given a Void rep
+    ret_reg@(CmmGlobal r) = dataReturnConvPrim rep
+    live_regs = Just [r]
+
+-- void return value
+performPrimReturn _ _
+  = performReturn $ emitReturnInstr (Just [])
+
 
 -- ---------------------------------------------------------------------------
 -- Vector tuple returns
 
-returnVector :: CgRep -> CmmExpr  -- The thing to return
+returnVector :: (CgRep, CmmExpr)  -- The thing to return
              -> Code
-returnVector rep amode = do
-    (EndOfBlockInfo args_sp _sequel) <- getEndOfBlockInfo
-    (final_sp, assts) <- pushVector args_sp rep amode
-    emitSimultaneously assts
-    doFinalJump final_sp False{-not a LNE-} emitReturnInstr
+returnVector amode
+  = do 	{ (EndOfBlockInfo args_sp _sequel) <- getEndOfBlockInfo
+	; (final_sp, assts, live_regs) <- pushVector args_sp amode
+	; emitSimultaneously assts
+	; doFinalJump final_sp False $ emitReturnInstr (Just live_regs) }
 
 pushVector :: VirtualSpOffset          -- Sp at which to start pushing
-           -> CgRep -> CmmExpr         -- vector to push
+           -> (CgRep, CmmExpr)         -- amodes of the vector
            -> FCode (VirtualSpOffset,  -- final Sp
-                     CmmStmts)         -- assignments (regs+stack)
-pushVector sp rep amode = do
-    (final_sp, nptr_assts) <- mkStkAmodes sp [(rep, amode)]
-    returnFC (final_sp, nptr_assts)
+                     CmmStmts,         -- assignments (regs+stack)
+                     [GlobalReg])      -- registers used (liveness)
+pushVector sp amode
+  = do	{ let	(reg_arg_amodes, stk_arg_amodes) = assignReturnRegs [amode]
+                live_regs = map snd reg_arg_amodes
+	
+		-- separate the rest of the args into pointers and non-pointers
+		(ptr_args, nptr_args) = separateByPtrFollowness stk_arg_amodes
+		reg_arg_assts = assignToRegs reg_arg_amodes
+		
+	    -- push ptrs, then nonptrs, on the stack
+	; (ptr_sp,   ptr_assts)  <- mkStkAmodes sp ptr_args
+	; (final_sp, nptr_assts) <- mkStkAmodes ptr_sp nptr_args
+
+	; returnFC (final_sp,
+	  	    reg_arg_assts `plusStmts` ptr_assts `plusStmts` nptr_assts,
+                    live_regs) }
 
 -- ---------------------------------------------------------------------------
 -- Unboxed tuple returns
@@ -352,19 +373,21 @@ returnUnboxedTuple :: [(CgRep, CmmExpr)] -> Code
 returnUnboxedTuple amodes
   = do 	{ (EndOfBlockInfo args_sp _sequel) <- getEndOfBlockInfo
 	; tickyUnboxedTupleReturn (length amodes)
-	; (final_sp, assts) <- pushUnboxedTuple args_sp amodes
+	; (final_sp, assts, live_regs) <- pushUnboxedTuple args_sp amodes
 	; emitSimultaneously assts
-	; doFinalJump final_sp False{-not a LNE-} emitReturnInstr }
+	; doFinalJump final_sp False $ emitReturnInstr (Just live_regs) }
 
 pushUnboxedTuple :: VirtualSpOffset		-- Sp at which to start pushing
 		 -> [(CgRep, CmmExpr)]		-- amodes of the components
 		 -> FCode (VirtualSpOffset,	-- final Sp
-			   CmmStmts)		-- assignments (regs+stack)
+			   CmmStmts,		-- assignments (regs+stack)
+                           [GlobalReg])         -- registers used (liveness)
 
 pushUnboxedTuple sp [] 
-  = return (sp, noStmts)
+  = return (sp, noStmts, [])
 pushUnboxedTuple sp amodes
   = do	{ let	(reg_arg_amodes, stk_arg_amodes) = assignReturnRegs amodes
+                live_regs = map snd reg_arg_amodes
 	
 		-- separate the rest of the args into pointers and non-pointers
 		(ptr_args, nptr_args) = separateByPtrFollowness stk_arg_amodes
@@ -375,8 +398,8 @@ pushUnboxedTuple sp amodes
 	; (final_sp, nptr_assts) <- mkStkAmodes ptr_sp nptr_args
 
 	; returnFC (final_sp,
-	  	    reg_arg_assts `plusStmts` 
-		    ptr_assts `plusStmts` nptr_assts) }
+	  	    reg_arg_assts `plusStmts` ptr_assts `plusStmts` nptr_assts,
+                    live_regs) }
     
 		  
 -- -----------------------------------------------------------------------------
@@ -426,13 +449,14 @@ tailCallPrim lbl args
 		-- Hence the ASSERT( null leftovers )
 	  arg_amodes <- getArgAmodes args
 	; let (arg_regs, leftovers) = assignPrimOpCallRegs arg_amodes
-	      jump_to_primop = jumpToLbl lbl
+              live_regs = Just $ map snd arg_regs
+	      jump_to_primop = jumpToLbl lbl live_regs
 
 	; ASSERT(null leftovers) -- no stack-resident args
  	  emitSimultaneously (assignToRegs arg_regs)
 
 	; EndOfBlockInfo args_sp _ <- getEndOfBlockInfo
-	; doFinalJump args_sp False{-not a LNE-} jump_to_primop }
+	; doFinalJump args_sp False jump_to_primop }
 
 -- -----------------------------------------------------------------------------
 -- Return Addresses
@@ -461,9 +485,9 @@ pushReturnAddress _ = nopC
 -- -----------------------------------------------------------------------------
 -- Misc.
 
-jumpToLbl :: CLabel -> Code
 -- Passes no argument to the destination procedure
-jumpToLbl lbl = stmtC (CmmJump (CmmLit (CmmLabel lbl)) [{- No args -}])
+jumpToLbl :: CLabel -> Maybe [GlobalReg] -> Code
+jumpToLbl lbl live = stmtC $ CmmJump (CmmLit $ CmmLabel lbl) live
 
 assignToRegs :: [(CmmExpr, GlobalReg)] -> CmmStmts
 assignToRegs reg_args 

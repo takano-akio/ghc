@@ -66,9 +66,8 @@ module TcMType (
   zonkTcType, zonkTcTypes, zonkTcThetaType,
 
   zonkTcKind, defaultKindVarToStar, zonkCt, zonkCts,
-  zonkImplication, zonkEvVar, zonkWantedEvVar,
+  zonkImplication, zonkEvVar, zonkWC, 
 
-  zonkWC, zonkWantedEvVars,
   zonkTcTypeAndSubst,
   tcGetGlobalTyVars, 
 
@@ -549,7 +548,8 @@ zonkTcTypeAndSubst subst ty = zonkType zonk_tv ty
   where
     zonk_tv tv
       = do { z_tv <- updateTyVarKindM zonkTcKind tv
-           ; case tcTyVarDetails tv of
+           ; ASSERT ( isTcTyVar tv )
+             case tcTyVarDetails tv of
                 SkolemTv {}   -> return (TyVarTy z_tv)
                 RuntimeUnk {} -> return (TyVarTy z_tv)
                 FlatSkol ty   -> zonkType zonk_tv ty
@@ -693,12 +693,6 @@ zonkCt ct
                        , cc_depth = cc_depth ct } }
 zonkCts :: Cts -> TcM Cts
 zonkCts = mapBagM zonkCt
-
-zonkWantedEvVars :: Bag WantedEvVar -> TcM (Bag WantedEvVar)
-zonkWantedEvVars = mapBagM zonkWantedEvVar
-
-zonkWantedEvVar :: WantedEvVar -> TcM WantedEvVar
-zonkWantedEvVar (EvVarX v l) = do { v' <- zonkEvVar v; return (EvVarX v' l) }
 
 zonkFlavor :: CtFlavor -> TcM CtFlavor
 zonkFlavor (Given loc gk) = do { loc' <- zonkGivenLoc loc; return (Given loc' gk) }
@@ -1116,6 +1110,10 @@ check_arg_type rank ty
 
 	; check_type rank' UT_NotOk ty
 	; checkTc (not (isUnLiftedType ty)) (unliftedArgErr ty) }
+             -- NB the isUnLiftedType test also checks for 
+             --    T State#
+             -- where there is an illegal partial application of State# (which has
+             -- kind * -> #); see Note [The kind invariant] in TypeRep
 
 ----------------------------------------
 forAllTyErr :: Rank -> Type -> SDoc
@@ -1620,7 +1618,7 @@ The underlying idea is that
 
 
 \begin{code}
-checkInstTermination :: [TcType] -> ThetaType -> [Message]
+checkInstTermination :: [TcType] -> ThetaType -> [MsgDoc]
 checkInstTermination tys theta
   = mapCatMaybes check theta
   where
@@ -1677,7 +1675,7 @@ checkValidFamInst typats rhs
 --
 checkFamInstRhs :: [Type]                  -- lhs
              	-> [(TyCon, [Type])]       -- type family instances
-             	-> [Message]
+             	-> [MsgDoc]
 checkFamInstRhs lhsTys famInsts
   = mapCatMaybes check famInsts
   where

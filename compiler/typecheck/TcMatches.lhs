@@ -31,12 +31,13 @@ import TcMType
 import TcType
 import TcBinds
 import TcUnify
+import TcErrors         ( misMatchMsg )
 import Name
 import TysWiredIn
 import Id
 import TyCon
 import TysPrim
-import Coercion         ( isReflCo, mkSymCo )
+import TcEvidence
 import Outputable
 import Util
 import SrcLoc
@@ -153,7 +154,7 @@ matchFunTys
 matchFunTys herald arity res_ty thing_inside
   = do	{ (co, pat_tys, res_ty) <- matchExpectedFunTys herald arity res_ty
 	; res <- thing_inside pat_tys res_ty
-        ; return (coToHsWrapper (mkSymCo co), res) }
+        ; return (coToHsWrapper (mkTcSymCo co), res) }
 \end{code}
 
 %************************************************************************
@@ -734,7 +735,7 @@ tcMcStmt ctxt (ParStmt bndr_stmts_s mzip_op bind_op return_op) res_ty thing_insi
 	-- so for now we just check that it's the identity
     check_same actual expected
       = do { co <- unifyType actual expected
-	   ; unless (isReflCo co) $
+	   ; unless (isTcReflCo co) $
              failWithMisMatch [UnifyOrigin { uo_expected = expected
                                            , uo_actual = actual }] }
 
@@ -832,7 +833,8 @@ tcDoStmt ctxt (RecStmt { recS_stmts = stmts, recS_later_ids = later_names
         ; return (RecStmt { recS_stmts = stmts', recS_later_ids = later_ids
                           , recS_rec_ids = rec_ids, recS_ret_fn = ret_op' 
                           , recS_mfix_fn = mfix_op', recS_bind_fn = bind_op'
-                          , recS_rec_rets = tup_rets, recS_ret_ty = stmts_ty }, thing)
+                          , recS_later_rets = [], recS_rec_rets = tup_rets
+                          , recS_ret_ty = stmts_ty }, thing)
         }}
 
 tcDoStmt _ stmt _ _
@@ -875,5 +877,22 @@ checkArgs fun (MatchGroup (match1:matches) _)
     args_in_match :: LMatch Name -> Int
     args_in_match (L _ (Match pats _ _)) = length pats
 checkArgs fun _ = pprPanic "TcPat.checkArgs" (ppr fun) -- Matches always non-empty
+
+failWithMisMatch :: [EqOrigin] -> TcM a
+-- Generate the message when two types fail to match,
+-- going to some trouble to make it helpful.
+-- We take the failing types from the top of the origin stack
+-- rather than reporting the particular ones we are looking 
+-- at right now
+failWithMisMatch (item:origin)
+  = wrapEqCtxt origin $
+    do	{ ty_act <- zonkTcType (uo_actual item)
+        ; ty_exp <- zonkTcType (uo_expected item)
+        ; env0 <- tcInitTidyEnv
+        ; let (env1, pp_exp) = tidyOpenType env0 ty_exp
+              (env2, pp_act) = tidyOpenType env1 ty_act
+        ; failWithTcM (env2, misMatchMsg True pp_exp pp_act) }
+failWithMisMatch [] 
+  = panic "failWithMisMatch"
 \end{code}
 

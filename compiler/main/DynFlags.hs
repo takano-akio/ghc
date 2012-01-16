@@ -29,6 +29,7 @@ module DynFlags (
         xopt_set,
         xopt_unset,
         DynFlags(..),
+        HasDynFlags(..),
         RtsOptsEnabled(..),
         HscTarget(..), isObjectTarget, defaultObjectTarget,
         GhcMode(..), isOneShot,
@@ -112,7 +113,7 @@ import Outputable
 #ifdef GHCI
 import Foreign.C        ( CInt(..) )
 #endif
-import {-# SOURCE #-} ErrUtils ( Severity(..), Message, mkLocMessage )
+import {-# SOURCE #-} ErrUtils ( Severity(..), MsgDoc, mkLocMessage )
 
 #ifdef GHCI
 import System.IO.Unsafe ( unsafePerformIO )
@@ -249,6 +250,8 @@ data DynFlag
    | Opt_RegsGraph                      -- do graph coloring register allocation
    | Opt_RegsIterative                  -- do iterative coalescing graph coloring register allocation
    | Opt_PedanticBottoms                -- Be picky about how we treat bottom
+   | Opt_LlvmTBAA                       -- Use LLVM TBAA infastructure for improving AA
+   | Opt_RegLiveness                    -- Use the STG Reg liveness information
 
    -- Interface files
    | Opt_IgnoreInterfacePragmas
@@ -287,6 +290,7 @@ data DynFlag
    | Opt_GhciSandbox
    | Opt_GhciHistory
    | Opt_HelpfulErrors
+   | Opt_DeferTypeErrors
 
    -- temporary flags
    | Opt_RunCPS
@@ -378,6 +382,7 @@ data ExtensionFlag
    | Opt_ForeignFunctionInterface
    | Opt_UnliftedFFITypes
    | Opt_InterruptibleFFI
+   | Opt_CApiFFI
    | Opt_GHCForeignImportPrim
    | Opt_ParallelArrays           -- Syntactic support for parallel arrays
    | Opt_Arrows                   -- Arrow-notation syntax
@@ -401,7 +406,8 @@ data ExtensionFlag
    | Opt_RebindableSyntax
    | Opt_ConstraintKinds
    | Opt_PolyKinds                -- Kind polymorphism
-
+   | Opt_InstanceSigs
+ 
    | Opt_StandaloneDeriving
    | Opt_DeriveDataTypeable
    | Opt_DeriveFunctor
@@ -561,11 +567,12 @@ data DynFlags = DynFlags {
   language              :: Maybe Language,
   -- | Safe Haskell mode
   safeHaskell           :: SafeHaskellMode,
-  -- We store the location of where template haskell and newtype deriving were
-  -- turned on so we can produce accurate error messages when Safe Haskell turns
-  -- them off.
+  -- We store the location of where some extension and flags were turned on so
+  -- we can produce accurate error messages when Safe Haskell fails due to
+  -- them.
   thOnLoc               :: SrcSpan,
   newDerivOnLoc         :: SrcSpan,
+  pkgTrustOnLoc         :: SrcSpan,
   warnSafeOnLoc         :: SrcSpan,
   warnUnsafeOnLoc       :: SrcSpan,
   -- Don't change this without updating extensionFlags:
@@ -574,7 +581,7 @@ data DynFlags = DynFlags {
   --     flattenExtensionFlags language extensions
   extensionFlags        :: IntSet,
 
-  -- | Message output action: use "ErrUtils" instead of this if you can
+  -- | MsgDoc output action: use "ErrUtils" instead of this if you can
   log_action            :: LogAction,
 
   haddockOptions        :: Maybe String,
@@ -583,11 +590,16 @@ data DynFlags = DynFlags {
   profAuto              :: ProfAuto
  }
 
+class HasDynFlags m where
+    getDynFlags :: m DynFlags
+
 data ProfAuto
   = NoProfAuto         -- ^ no SCC annotations added
   | ProfAutoAll        -- ^ top-level and nested functions are annotated
   | ProfAutoTop        -- ^ top-level functions annotated only
   | ProfAutoExports    -- ^ exported functions annotated only
+  | ProfAutoCalls      -- ^ annotate call-sites
+  deriving (Enum)
 
 data Settings = Settings {
   sTargetPlatform        :: Platform,    -- Filled in by SysTools
@@ -903,6 +915,7 @@ defaultDynFlags mySettings =
         safeHaskell = Sf_SafeInfered,
         thOnLoc = noSrcSpan,
         newDerivOnLoc = noSrcSpan,
+        pkgTrustOnLoc = noSrcSpan,
         warnSafeOnLoc = noSrcSpan,
         warnUnsafeOnLoc = noSrcSpan,
         extensions = [],
@@ -911,7 +924,7 @@ defaultDynFlags mySettings =
         profAuto = NoProfAuto
       }
 
-type LogAction = Severity -> SrcSpan -> PprStyle -> Message -> IO ()
+type LogAction = Severity -> SrcSpan -> PprStyle -> MsgDoc -> IO ()
 
 defaultLogAction :: LogAction
 defaultLogAction severity srcSpan style msg
@@ -920,7 +933,7 @@ defaultLogAction severity srcSpan style msg
    SevInfo   -> printErrs msg style
    SevFatal  -> printErrs msg style
    _         -> do hPutChar stderr '\n'
-                   printErrs (mkLocMessage srcSpan msg) style
+                   printErrs (mkLocMessage severity srcSpan msg) style
                    -- careful (#2302): printErrs prints in UTF-8, whereas
                    -- converting to string first and using hPutStr would
                    -- just emit the low 8 bits of each unicode char.
@@ -1298,18 +1311,27 @@ parseDynamicFlags dflags0 args cmdline = do
   when (not (null errs)) $ ghcError $ errorsToGhcException errs
 
   -- check for disabled flags in safe haskell
-  let (dflags2, sh_warns) = safeFlagCheck dflags1
+  let (dflags2, sh_warns) = safeFlagCheck cmdline dflags1
 
   return (dflags2, leftover, sh_warns ++ warns)
 
 -- | Check (and potentially disable) any extensions that aren't allowed
 -- in safe mode.
-safeFlagCheck :: DynFlags -> (DynFlags, [Located String])
-safeFlagCheck dflags | not (safeLanguageOn dflags || safeInferOn dflags)
-                     = (dflags, [])
-safeFlagCheck dflags =
+safeFlagCheck :: Bool -> DynFlags -> (DynFlags, [Located String])
+safeFlagCheck _  dflags | not (safeLanguageOn dflags || safeInferOn dflags)
+                        = (dflags, [])
+
+safeFlagCheck cmdl dflags =
     case safeLanguageOn dflags of
         True -> (dflags', warns)
+
+        -- throw error if -fpackage-trust by itself with no safe haskell flag
+        False | not cmdl && safeInferOn dflags && packageTrustOn dflags
+              -> (dopt_unset dflags' Opt_PackageTrust,
+                  [L (pkgTrustOnLoc dflags') $
+                      "-fpackage-trust ignored;" ++
+                      " must be specified with a Safe Haskell flag"]
+                  )
 
         False | null warns && safeInfOk
               -> (dflags', [])
@@ -1330,8 +1352,8 @@ safeFlagCheck dflags =
 
         apFix f = if safeInferOn dflags then id else f
 
-        safeFailure loc str = [L loc $ "Warning: " ++ str ++ " is not allowed in"
-                                      ++ " Safe Haskell; ignoring " ++ str]
+        safeFailure loc str 
+           = [L loc $ str ++ " is not allowed in Safe Haskell; ignoring " ++ str]
 
         bad_flags = [("-XGeneralizedNewtypeDeriving", newDerivOnLoc dflags,
                          xopt Opt_GeneralizedNewtypeDeriving,
@@ -1636,6 +1658,7 @@ dynamic_flags = [
   , Flag "fprof-auto"             (noArg (\d -> d { profAuto = ProfAutoAll } ))
   , Flag "fprof-auto-top"         (noArg (\d -> d { profAuto = ProfAutoTop } ))
   , Flag "fprof-auto-exported"    (noArg (\d -> d { profAuto = ProfAutoExports } ))
+  , Flag "fprof-auto-calls"       (noArg (\d -> d { profAuto = ProfAutoCalls } ))
   , Flag "fno-prof-auto"          (noArg (\d -> d { profAuto = NoProfAuto } ))
 
         ------ Compiler flags -----------------------------------------------
@@ -1655,7 +1678,7 @@ dynamic_flags = [
   , Flag "fno-glasgow-exts" (NoArg (disableGlasgowExts >> deprecate "Use individual extensions instead"))
 
         ------ Safe Haskell flags -------------------------------------------
-  , Flag "fpackage-trust"   (NoArg (setDynFlag Opt_PackageTrust))
+  , Flag "fpackage-trust"   (NoArg setPackageTrust)
   , Flag "fno-safe-infer"   (NoArg (setSafeHaskell Sf_None))
  ]
  ++ map (mkFlag turnOn  "f"    setDynFlag  ) fFlags
@@ -1802,6 +1825,8 @@ fFlags = [
   ( "vectorise",                        Opt_Vectorise, nop ),
   ( "regs-graph",                       Opt_RegsGraph, nop ),
   ( "regs-iterative",                   Opt_RegsIterative, nop ),
+  ( "llvm-tbaa",                        Opt_LlvmTBAA, nop),
+  ( "reg-liveness",                     Opt_RegLiveness, nop),
   ( "gen-manifest",                     Opt_GenManifest, nop ),
   ( "embed-manifest",                   Opt_EmbedManifest, nop ),
   ( "ext-core",                         Opt_EmitExternalCore, nop ),
@@ -1809,6 +1834,7 @@ fFlags = [
   ( "ghci-sandbox",                     Opt_GhciSandbox, nop ),
   ( "ghci-history",                     Opt_GhciHistory, nop ),
   ( "helpful-errors",                   Opt_HelpfulErrors, nop ),
+  ( "defer-type-errors",                Opt_DeferTypeErrors, nop ),
   ( "building-cabal-package",           Opt_BuildingCabalPackage, nop ),
   ( "implicit-import-qualified",        Opt_ImplicitImportQualified, nop ),
   ( "prof-count-entries",               Opt_ProfCountEntries, nop ),
@@ -1898,6 +1924,7 @@ xFlags = [
   ( "ForeignFunctionInterface",         Opt_ForeignFunctionInterface, nop ),
   ( "UnliftedFFITypes",                 Opt_UnliftedFFITypes, nop ),
   ( "InterruptibleFFI",                 Opt_InterruptibleFFI, nop ),
+  ( "CApiFFI",                          Opt_CApiFFI, nop ),
   ( "GHCForeignImportPrim",             Opt_GHCForeignImportPrim, nop ),
   ( "LiberalTypeSynonyms",              Opt_LiberalTypeSynonyms, nop ),
   ( "Rank2Types",                       Opt_Rank2Types, nop ),
@@ -1929,6 +1956,7 @@ xFlags = [
   ( "RebindableSyntax",                 Opt_RebindableSyntax, nop ),
   ( "ConstraintKinds",                  Opt_ConstraintKinds, nop ),
   ( "PolyKinds",                        Opt_PolyKinds, nop ),
+  ( "InstanceSigs",                     Opt_InstanceSigs, nop ),
   ( "MonoPatBinds",                     Opt_MonoPatBinds,
     \ turn_on -> when turn_on $ deprecate "Experimental feature now removed; has no effect" ),
   ( "ExplicitForAll",                   Opt_ExplicitForAll, nop ),
@@ -2047,6 +2075,8 @@ optLevelFlags
     , ([2],     Opt_LiberateCase)
     , ([2],     Opt_SpecConstr)
     , ([2],     Opt_RegsGraph)
+    , ([0,1,2], Opt_LlvmTBAA)
+    , ([0,1,2], Opt_RegLiveness)
 
 --     , ([2],     Opt_StaticArgumentTransformation)
 -- Max writes: I think it's probably best not to enable SAT with -O2 for the
@@ -2165,6 +2195,12 @@ setWarnSafe False = return ()
 setWarnUnsafe :: Bool -> DynP ()
 setWarnUnsafe True  = getCurLoc >>= \l -> upd (\d -> d { warnUnsafeOnLoc = l })
 setWarnUnsafe False = return ()
+
+setPackageTrust :: DynP ()
+setPackageTrust = do
+    setDynFlag Opt_PackageTrust
+    l <- getCurLoc
+    upd $ \d -> d { pkgTrustOnLoc = l }
 
 setGenDeriving :: Bool -> DynP ()
 setGenDeriving True  = getCurLoc >>= \l -> upd (\d -> d { newDerivOnLoc = l })

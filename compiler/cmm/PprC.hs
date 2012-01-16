@@ -172,7 +172,7 @@ pprLocalness lbl | not $ externallyVisibleCLabel lbl = ptext (sLit "static ")
 pprStmt :: Platform -> CmmStmt -> SDoc
 
 pprStmt platform stmt = case stmt of
-    CmmReturn _  -> panic "pprStmt: return statement should have been cps'd away"
+    CmmReturn    -> panic "pprStmt: return statement should have been cps'd away"
     CmmNop       -> empty
     CmmComment _ -> empty -- (hang (ptext (sLit "/*")) 3 (ftext s)) $$ ptext (sLit "*/")
                           -- XXX if the string contains "*/", we need to fix it
@@ -193,7 +193,7 @@ pprStmt platform stmt = case stmt of
         where
           rep = cmmExprType src
 
-    CmmCall (CmmCallee fn cconv) results args safety ret ->
+    CmmCall (CmmCallee fn cconv) results args ret ->
         maybe_proto $$
         fnCall
         where
@@ -215,7 +215,7 @@ pprStmt platform stmt = case stmt of
             case fn of
               CmmLit (CmmLabel lbl)
                 | StdCallConv <- cconv ->
-                    let myCall = pprCall platform (pprCLabel platform lbl) cconv results args safety
+                    let myCall = pprCall platform (pprCLabel platform lbl) cconv results args
                     in (real_fun_proto lbl, myCall)
                         -- stdcall functions must be declared with
                         -- a function type, otherwise the C compiler
@@ -223,22 +223,22 @@ pprStmt platform stmt = case stmt of
                         -- can't add the @n suffix ourselves, because
                         -- it isn't valid C.
                 | CmmNeverReturns <- ret ->
-                    let myCall = pprCall platform (pprCLabel platform lbl) cconv results args safety
+                    let myCall = pprCall platform (pprCLabel platform lbl) cconv results args
                     in (real_fun_proto lbl, myCall)
                 | not (isMathFun lbl) ->
                     let myCall = braces (
                                      pprCFunType (char '*' <> text "ghcFunPtr") cconv results args <> semi
                                   $$ text "ghcFunPtr" <+> equals <+> cast_fn <> semi
-                                  $$ pprCall platform (text "ghcFunPtr") cconv results args safety <> semi
+                                  $$ pprCall platform (text "ghcFunPtr") cconv results args <> semi
                                  )
                     in (fun_proto lbl, myCall)
               _ ->
                    (empty {- no proto -},
-                    pprCall platform cast_fn cconv results args safety <> semi)
+                    pprCall platform cast_fn cconv results args <> semi)
                         -- for a dynamic call, no declaration is necessary.
 
-    CmmCall (CmmPrim op) results args safety _ret ->
-        pprCall platform ppr_fn CCallConv results args' safety
+    CmmCall (CmmPrim op) results args _ret ->
+        pprCall platform ppr_fn CCallConv results args'
         where
         ppr_fn = pprCallishMachOp_for_C op
         -- The mem primops carry an extra alignment arg, must drop it.
@@ -248,7 +248,7 @@ pprStmt platform stmt = case stmt of
 
     CmmBranch ident          -> pprBranch ident
     CmmCondBranch expr ident -> pprCondBranch platform expr ident
-    CmmJump lbl _params      -> mkJMP_(pprExpr platform lbl) <> semi
+    CmmJump lbl _            -> mkJMP_(pprExpr platform lbl) <> semi
     CmmSwitch arg ids        -> pprSwitch platform arg ids
 
 pprCFunType :: SDoc -> CCallConv -> [HintedCmmFormal] -> [HintedCmmActual] -> SDoc
@@ -447,9 +447,6 @@ pprLit platform lit = case lit of
         -- WARNING:
         --  * the lit must occur in the info table clbl2
         --  * clbl1 must be an SRT, a slow entry point or a large bitmap
-        -- The Mangler is expected to convert any reference to an SRT,
-        -- a slow entry point or a large bitmap
-        -- from an info table to an offset.
         -> mkW_ <> pprCLabelAddr clbl1 <> char '+' <> int i
 
     where
@@ -760,12 +757,14 @@ isStrangeTypeReg (CmmLocal _)   = False
 isStrangeTypeReg (CmmGlobal g)  = isStrangeTypeGlobal g
 
 isStrangeTypeGlobal :: GlobalReg -> Bool
+isStrangeTypeGlobal CCCS                = True
 isStrangeTypeGlobal CurrentTSO          = True
 isStrangeTypeGlobal CurrentNursery      = True
 isStrangeTypeGlobal BaseReg             = True
 isStrangeTypeGlobal r                   = isFixedPtrGlobalReg r
 
 strangeRegType :: CmmReg -> Maybe SDoc
+strangeRegType (CmmGlobal CCCS) = Just (ptext (sLit "struct CostCentreStack_ *"))
 strangeRegType (CmmGlobal CurrentTSO) = Just (ptext (sLit "struct StgTSO_ *"))
 strangeRegType (CmmGlobal CurrentNursery) = Just (ptext (sLit "struct bdescr_ *"))
 strangeRegType (CmmGlobal BaseReg) = Just (ptext (sLit "struct StgRegTable_ *"))
@@ -796,6 +795,7 @@ pprGlobalReg gr = case gr of
     SpLim          -> ptext (sLit "SpLim")
     Hp             -> ptext (sLit "Hp")
     HpLim          -> ptext (sLit "HpLim")
+    CCCS           -> ptext (sLit "CCCS")
     CurrentTSO     -> ptext (sLit "CurrentTSO")
     CurrentNursery -> ptext (sLit "CurrentNursery")
     HpAlloc        -> ptext (sLit "HpAlloc")
@@ -812,10 +812,10 @@ pprLocalReg (LocalReg uniq _) = char '_' <> ppr uniq
 -- Foreign Calls
 
 pprCall :: Platform -> SDoc -> CCallConv
-        -> [HintedCmmFormal] -> [HintedCmmActual] -> CmmSafety
+        -> [HintedCmmFormal] -> [HintedCmmActual]
         -> SDoc
 
-pprCall platform ppr_fn cconv results args _
+pprCall platform ppr_fn cconv results args
   | not (is_cishCC cconv)
   = panic $ "pprCall: unknown calling convention"
 
@@ -845,6 +845,7 @@ pprCall platform ppr_fn cconv results args _
 -- change in the future...
 is_cishCC :: CCallConv -> Bool
 is_cishCC CCallConv    = True
+is_cishCC CApiConv     = True
 is_cishCC StdCallConv  = True
 is_cishCC CmmCallConv  = False
 is_cishCC PrimCallConv = False
@@ -925,7 +926,7 @@ te_Lit _ = return ()
 te_Stmt :: CmmStmt -> TE ()
 te_Stmt (CmmAssign r e)         = te_Reg r >> te_Expr e
 te_Stmt (CmmStore l r)          = te_Expr l >> te_Expr r
-te_Stmt (CmmCall _ rs es _ _)   = mapM_ (te_temp.hintlessCmm) rs >>
+te_Stmt (CmmCall _ rs es _)     = mapM_ (te_temp.hintlessCmm) rs >>
                                   mapM_ (te_Expr.hintlessCmm) es
 te_Stmt (CmmCondBranch e _)     = te_Expr e
 te_Stmt (CmmSwitch e _)         = te_Expr e

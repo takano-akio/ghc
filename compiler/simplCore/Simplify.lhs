@@ -45,6 +45,7 @@ import TysPrim          ( realWorldStatePrimTy )
 import BasicTypes       ( TopLevelFlag(..), isTopLevel, RecFlag(..) )
 import MonadUtils	( foldlM, mapAccumLM )
 import Maybes           ( orElse, isNothing )
+import StaticFlags      ( opt_AggressivePrimOps )
 import Data.List        ( mapAccumL )
 import Outputable
 import FastString
@@ -477,7 +478,7 @@ prepareRhs top_lvl env0 _ rhs0
     go n_val_args env (Var fun)
         = return (is_exp, env, Var fun)
         where
-          is_exp = isExpandableApp fun n_val_args   -- The fun a constructor or PAP
+          is_exp = isConLikeApp fun n_val_args   -- The fun a constructor or PAP
 		        -- See Note [CONLIKE pragma] in BasicTypes
 			-- The definition of is_exp should match that in
 	                -- OccurAnal.occAnalApp
@@ -976,11 +977,6 @@ simplType env ty
 ---------------------------------
 simplCoercionF :: SimplEnv -> InCoercion -> SimplCont
                -> SimplM (SimplEnv, OutExpr)
--- We are simplifying a term of form (Coercion co)
--- Simplify the InCoercion, and then try to combine with the 
--- context, to implememt the rule
---     (Coercion co) |> g
---  =  Coercion (syn (nth 0 g) ; co ; nth 1 g) 
 simplCoercionF env co cont 
   = do { co' <- simplCoercion env co
        ; rebuild env (Coercion co') cont }
@@ -1031,7 +1027,7 @@ simplTick env tickish expr cont
   | not (tickishCanSplit tickish)
   = no_floating_past_tick
 
-  | Just expr' <- want_to_push_tick_inside
+  | interesting_cont, Just expr' <- push_tick_inside tickish expr
     -- see Note [case-of-scc-of-case]
   = simplExprF env expr' cont
 
@@ -1039,20 +1035,35 @@ simplTick env tickish expr cont
   = no_floating_past_tick -- was: wrap_floats, see below
 
  where
-  want_to_push_tick_inside
-     | not interesting_cont = Nothing
-     | not (tickishCanSplit tickish) = Nothing
+  interesting_cont = case cont of
+                        Select _ _ _ _ _ -> True
+                        _ -> False
+
+  push_tick_inside t expr0
+     | not (tickishCanSplit t) = Nothing
      | otherwise
-       = case expr of
+       = case expr0 of
+           Tick t' expr
+              -- scc t (tick t' E)
+              --   Pull the tick to the outside
+              -- This one is important for #5363
+              | not (tickishScoped t')
+                 -> Just (Tick t' (Tick t expr))
+
+              -- scc t (scc t' E)
+              --   Try to push t' into E first, and if that works,
+              --   try to push t in again
+              | Just expr' <- push_tick_inside t' expr
+                 -> push_tick_inside t expr'
+
+              | otherwise -> Nothing
+
            Case scrut bndr ty alts
-              -> Just (Case (mkTick tickish scrut) bndr ty alts')
-             where t_scope = mkNoTick tickish -- drop the tick on the dup'd ones
+              -> Just (Case (mkTick t scrut) bndr ty alts')
+             where t_scope = mkNoTick t -- drop the tick on the dup'd ones
                    alts'   = [ (c,bs, mkTick t_scope e) | (c,bs,e) <- alts]
            _other -> Nothing
     where
-      interesting_cont = case cont of
-                            Select _ _ _ _ _ -> True
-                            _ -> False
 
   no_floating_past_tick =
     do { let (inc,outc) = splitCont cont
@@ -1149,7 +1160,7 @@ rebuild env expr cont
   = case cont of
       Stop {}                      -> return (env, expr)
       CoerceIt co cont             -> rebuild env (mkCast expr co) cont 
-                                         -- NB: mkCast implements the (Coercion co |> g) optimisation
+                                   -- NB: mkCast implements the (Coercion co |> g) optimisation
       Select _ bndr alts se cont   -> rebuildCase (se `setFloats` env) expr bndr alts cont
       StrictArg info _ cont        -> rebuildCall env (info `addArgTo` expr) cont
       StrictBind b bs body se cont -> do { env' <- simplNonRecX (se `setFloats` env) b expr
@@ -1647,7 +1658,7 @@ check that
 or
         (b) the scrutinee is a variable and 'x' is used strictly
 or
-        (c) 'x' is not used at all and e is ok-for-speculation
+        (c) 'x' is not used at all and e certainly terminates
 
 For the (c), consider
    case (case a ># b of { True -> (p,q); False -> (q,p) }) of
@@ -1751,7 +1762,7 @@ rebuildCase env scrut case_bndr [(_, bndrs, rhs)] cont
  | all isDeadBinder bndrs       -- bndrs are [InId]
 
  , if isUnLiftedType (idType case_bndr)
-   then ok_for_spec         -- Satisfy the let-binding invariant
+   then elim_unlifted        -- Satisfy the let-binding invariant
    else elim_lifted
   = do  { -- pprTrace "case elim" (vcat [ppr case_bndr, ppr (exprIsHNF scrut),
           --                            ppr strict_case_bndr, ppr (scrut_is_var scrut),
@@ -1768,10 +1779,21 @@ rebuildCase env scrut case_bndr [(_, bndrs, rhs)] cont
               -- The case binder is going to be evaluated later,
               -- and the scrutinee is a simple variable
 
-     || (is_plain_seq && ok_for_spec)
+     || (is_plain_seq && expr_terminates)
               -- Note: not the same as exprIsHNF
 
-    ok_for_spec      = exprOkForSpeculation scrut
+    elim_unlifted 
+      | is_plain_seq
+      = if opt_AggressivePrimOps then expr_terminates
+        else exprOkForSideEffects scrut
+            -- The entire case is dead, so we can drop it
+            -- But if AggressivePrimOps isn't on, only drop it
+            -- if it has no side effects
+      | otherwise = exprOkForSpeculation scrut
+            -- The case-binder is alive, but we may be able
+            -- turn the case into a let, if the expression is ok-for-spec
+
+    expr_terminates  = exprCertainlyTerminates scrut
     is_plain_seq     = isDeadBinder case_bndr	-- Evaluation *only* for effect
     strict_case_bndr = isStrictDmd (idDemandInfo case_bndr)
 

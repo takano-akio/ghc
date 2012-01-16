@@ -105,7 +105,7 @@ find an occurence of an Id, we fetch it from the in-scope set.
 
 
 \begin{code}
-lintCoreBindings :: CoreProgram -> (Bag Message, Bag Message)
+lintCoreBindings :: CoreProgram -> (Bag MsgDoc, Bag MsgDoc)
 --   Returns (warnings, errors)
 lintCoreBindings binds
   = initL $ 
@@ -150,7 +150,7 @@ We use this to check all unfoldings that come in from interfaces
 lintUnfolding :: SrcLoc
 	      -> [Var]		-- Treat these as in scope
 	      -> CoreExpr
-	      -> Maybe Message	-- Nothing => OK
+	      -> Maybe MsgDoc	-- Nothing => OK
 
 lintUnfolding locn vars expr
   | isEmptyBag errs = Nothing
@@ -700,29 +700,6 @@ lintTyBndrKind tv =
   else lintKind ki  -- type forall
 
 -------------------
-{-
-lint_prim_eq_co :: TyCon -> OutCoercion -> [OutCoercion] -> LintM (OutType,OutType)
-lint_prim_eq_co tc co arg_cos = case arg_cos of 
-  [co1,co2] -> do { (t1,s1) <- lintCoercion co1
-                  ; (t2,s2) <- lintCoercion co2
-                  ; checkL (typeKind t1 `eqKind` typeKind t2) $ 
-                    ptext (sLit "Mismatched arg kinds in coercion application:") <+> ppr co
-                  ; return (mkTyConApp tc [t1,t2], mkTyConApp tc [s1,s2]) }
-  _ -> failWithL (ptext (sLit "Unsaturated or oversaturated ~# coercion") <+> ppr co)
-
-lint_eq_co :: TyCon -> OutCoercion -> [OutCoercion] -> LintM (OutType,OutType) 
-lint_eq_co tc co arg_cos = case arg_cos of 
-  [co1,co2] -> do { (t1,s1) <- lintCoercion co1
-                  ; (t2,s2) <- lintCoercion co2
-                  ; checkL (typeKind t1 `eqKind` typeKind t2) $
-                    ptext (sLit "Mismatched arg kinds in coercion application:") <+> ppr co
-                  ; return (mkTyConApp tc [t1,t2], mkTyConApp tc [s1,s2]) }
-  [co1] -> do { (t1,s1) <- lintCoercion co1
-              ; return (mkTyConApp tc [t1], mkTyConApp tc [s1]) }
-  [] -> return (mkTyConApp tc [], mkTyConApp tc [])
-  _ -> failWithL (ptext (sLit "Oversaturated ~ coercion") <+> ppr co) 
--}
-
 lintKindCoercion :: OutCoercion -> LintM OutKind
 -- Kind coercions are only reflexivity because they mean kind
 -- instantiation.  See Note [Kind coercions] in Coercion
@@ -742,21 +719,6 @@ lintCoercion (Refl ty)
        ; return (ty, ty) }
 
 lintCoercion co@(TyConAppCo tc cos)
-{- DV: This grievous hack (from ghc-constraint-solver) should not be needed any more:
-  | tc `hasKey` eqPrimTyConKey      -- Just as in lintType, treat applications of (~) and (~#)
-  = lint_prim_eq_co tc co cos       -- specially to allow for polymorphism. This hack will 
-                                    -- hopefully go away when we merge in kind polymorphism.
-  | tc `hasKey` eqTyConKey
-  = lint_eq_co tc co cos
-
-  | otherwise
-  = do { (ss,ts) <- mapAndUnzipM lintCoercion cos
-       ; let kind_to_check = if (tc `hasKey` funTyConKey) && (length cos == 2)
-                             then mkArrowKinds [argTypeKind,openTypeKind] liftedTypeKind
-                             else tyConKind tc -- TODO: Fix this when kind polymorphism is in! 
-       ; check_co_app co kind_to_check ss
-       ; return (mkTyConApp tc ss, mkTyConApp tc ts) }
--}
   = do   -- We use the kind of the type constructor to know how many
          -- kind coercions we have (one kind coercion for one kind
          -- instantiation).
@@ -876,7 +838,10 @@ lintType ty@(FunTy t1 t2)
   = lint_ty_app ty (mkArrowKinds [argTypeKind, openTypeKind] liftedTypeKind) [t1,t2]
 
 lintType ty@(TyConApp tc tys)
-  | tyConHasKind tc
+  | tyConHasKind tc   -- Guards for SuperKindOon
+  , not (isUnLiftedTyCon tc) || tys `lengthIs` tyConArity tc
+       -- Check that primitive types are saturated
+       -- See Note [The kind invariant] in TypeRep
   = lint_ty_app ty (tyConKind tc) tys
   | otherwise
   = failWithL (hang (ptext (sLit "Malformed type:")) 2 (ppr ty))
@@ -940,7 +905,7 @@ newtype LintM a =
 	    WarnsAndErrs ->           -- Error and warning messages so far
 	    (Maybe a, WarnsAndErrs) } -- Result and messages (if any)
 
-type WarnsAndErrs = (Bag Message, Bag Message)
+type WarnsAndErrs = (Bag MsgDoc, Bag MsgDoc)
 
 {-	Note [Type substitution]
 	~~~~~~~~~~~~~~~~~~~~~~~~
@@ -988,23 +953,23 @@ initL m
 \end{code}
 
 \begin{code}
-checkL :: Bool -> Message -> LintM ()
+checkL :: Bool -> MsgDoc -> LintM ()
 checkL True  _   = return ()
 checkL False msg = failWithL msg
 
-failWithL :: Message -> LintM a
+failWithL :: MsgDoc -> LintM a
 failWithL msg = LintM $ \ loc subst (warns,errs) ->
                 (Nothing, (warns, addMsg subst errs msg loc))
 
-addErrL :: Message -> LintM ()
+addErrL :: MsgDoc -> LintM ()
 addErrL msg = LintM $ \ loc subst (warns,errs) -> 
               (Just (), (warns, addMsg subst errs msg loc))
 
-addWarnL :: Message -> LintM ()
+addWarnL :: MsgDoc -> LintM ()
 addWarnL msg = LintM $ \ loc subst (warns,errs) -> 
               (Just (), (addMsg subst warns msg loc, errs))
 
-addMsg :: TvSubst ->  Bag Message -> Message -> [LintLocInfo] -> Bag Message
+addMsg :: TvSubst ->  Bag MsgDoc -> MsgDoc -> [LintLocInfo] -> Bag MsgDoc
 addMsg subst msgs msg locs
   = ASSERT( notNull locs )
     msgs `snocBag` mk_msg msg
@@ -1015,7 +980,7 @@ addMsg subst msgs msg locs
 				      ptext (sLit "Substitution:") <+> ppr subst
 	       | otherwise	    = cxt1
  
-   mk_msg msg = mkLocMessage (mkSrcSpan loc loc) (context $$ msg)
+   mk_msg msg = mkLocMessage SevWarning (mkSrcSpan loc loc) (context $$ msg)
 
 addLoc :: LintLocInfo -> LintM a -> LintM a
 addLoc extra_loc m =
@@ -1087,7 +1052,7 @@ checkInScope loc_msg var =
     ; checkL (not (mustHaveLocalBinding var) || (var `isInScope` subst))
              (hsep [ppr var, loc_msg]) }
 
-checkTys :: OutType -> OutType -> Message -> LintM ()
+checkTys :: OutType -> OutType -> MsgDoc -> LintM ()
 -- check ty2 is subtype of ty1 (ie, has same structure but usage
 -- annotations need only be consistent, not equal)
 -- Assumes ty1,ty2 are have alrady had the substitution applied
@@ -1145,39 +1110,39 @@ pp_binder b | isId b    = hsep [ppr b, dcolon, ppr (idType b)]
 ------------------------------------------------------
 --	Messages for case expressions
 
-mkNullAltsMsg :: CoreExpr -> Message
+mkNullAltsMsg :: CoreExpr -> MsgDoc
 mkNullAltsMsg e 
   = hang (text "Case expression with no alternatives:")
 	 4 (ppr e)
 
-mkDefaultArgsMsg :: [Var] -> Message
+mkDefaultArgsMsg :: [Var] -> MsgDoc
 mkDefaultArgsMsg args 
   = hang (text "DEFAULT case with binders")
 	 4 (ppr args)
 
-mkCaseAltMsg :: CoreExpr -> Type -> Type -> Message
+mkCaseAltMsg :: CoreExpr -> Type -> Type -> MsgDoc
 mkCaseAltMsg e ty1 ty2
   = hang (text "Type of case alternatives not the same as the annotation on case:")
 	 4 (vcat [ppr ty1, ppr ty2, ppr e])
 
-mkScrutMsg :: Id -> Type -> Type -> TvSubst -> Message
+mkScrutMsg :: Id -> Type -> Type -> TvSubst -> MsgDoc
 mkScrutMsg var var_ty scrut_ty subst
   = vcat [text "Result binder in case doesn't match scrutinee:" <+> ppr var,
 	  text "Result binder type:" <+> ppr var_ty,--(idType var),
 	  text "Scrutinee type:" <+> ppr scrut_ty,
      hsep [ptext (sLit "Current TV subst"), ppr subst]]
 
-mkNonDefltMsg, mkNonIncreasingAltsMsg :: CoreExpr -> Message
+mkNonDefltMsg, mkNonIncreasingAltsMsg :: CoreExpr -> MsgDoc
 mkNonDefltMsg e
   = hang (text "Case expression with DEFAULT not at the beginnning") 4 (ppr e)
 mkNonIncreasingAltsMsg e
   = hang (text "Case expression with badly-ordered alternatives") 4 (ppr e)
 
-nonExhaustiveAltsMsg :: CoreExpr -> Message
+nonExhaustiveAltsMsg :: CoreExpr -> MsgDoc
 nonExhaustiveAltsMsg e
   = hang (text "Case expression with non-exhaustive alternatives") 4 (ppr e)
 
-mkBadConMsg :: TyCon -> DataCon -> Message
+mkBadConMsg :: TyCon -> DataCon -> MsgDoc
 mkBadConMsg tycon datacon
   = vcat [
 	text "In a case alternative, data constructor isn't in scrutinee type:",
@@ -1185,7 +1150,7 @@ mkBadConMsg tycon datacon
 	text "Data con:" <+> ppr datacon
     ]
 
-mkBadPatMsg :: Type -> Type -> Message
+mkBadPatMsg :: Type -> Type -> MsgDoc
 mkBadPatMsg con_result_ty scrut_ty
   = vcat [
 	text "In a case alternative, pattern result type doesn't match scrutinee type:",
@@ -1193,17 +1158,17 @@ mkBadPatMsg con_result_ty scrut_ty
 	text "Scrutinee type:" <+> ppr scrut_ty
     ]
 
-integerScrutinisedMsg :: Message
+integerScrutinisedMsg :: MsgDoc
 integerScrutinisedMsg
   = text "In a LitAlt, the literal is lifted (probably Integer)"
 
-mkBadAltMsg :: Type -> CoreAlt -> Message
+mkBadAltMsg :: Type -> CoreAlt -> MsgDoc
 mkBadAltMsg scrut_ty alt
   = vcat [ text "Data alternative when scrutinee is not a tycon application",
 	   text "Scrutinee type:" <+> ppr scrut_ty,
 	   text "Alternative:" <+> pprCoreAlt alt ]
 
-mkNewTyDataConAltMsg :: Type -> CoreAlt -> Message
+mkNewTyDataConAltMsg :: Type -> CoreAlt -> MsgDoc
 mkNewTyDataConAltMsg scrut_ty alt
   = vcat [ text "Data alternative for newtype datacon",
 	   text "Scrutinee type:" <+> ppr scrut_ty,
@@ -1213,21 +1178,21 @@ mkNewTyDataConAltMsg scrut_ty alt
 ------------------------------------------------------
 --	Other error messages
 
-mkAppMsg :: Type -> Type -> CoreExpr -> Message
+mkAppMsg :: Type -> Type -> CoreExpr -> MsgDoc
 mkAppMsg fun_ty arg_ty arg
   = vcat [ptext (sLit "Argument value doesn't match argument type:"),
 	      hang (ptext (sLit "Fun type:")) 4 (ppr fun_ty),
 	      hang (ptext (sLit "Arg type:")) 4 (ppr arg_ty),
 	      hang (ptext (sLit "Arg:")) 4 (ppr arg)]
 
-mkNonFunAppMsg :: Type -> Type -> CoreExpr -> Message
+mkNonFunAppMsg :: Type -> Type -> CoreExpr -> MsgDoc
 mkNonFunAppMsg fun_ty arg_ty arg
   = vcat [ptext (sLit "Non-function type in function position"),
 	      hang (ptext (sLit "Fun type:")) 4 (ppr fun_ty),
 	      hang (ptext (sLit "Arg type:")) 4 (ppr arg_ty),
 	      hang (ptext (sLit "Arg:")) 4 (ppr arg)]
 
-mkLetErr :: TyVar -> CoreExpr -> Message
+mkLetErr :: TyVar -> CoreExpr -> MsgDoc
 mkLetErr bndr rhs
   = vcat [ptext (sLit "Bad `let' binding:"),
 	  hang (ptext (sLit "Variable:"))
@@ -1235,7 +1200,7 @@ mkLetErr bndr rhs
 	  hang (ptext (sLit "Rhs:"))   
 	         4 (ppr rhs)]
 
-mkTyCoAppErrMsg :: TyVar -> Coercion -> Message
+mkTyCoAppErrMsg :: TyVar -> Coercion -> MsgDoc
 mkTyCoAppErrMsg tyvar arg_co
   = vcat [ptext (sLit "Kinds don't match in lifted coercion application:"),
           hang (ptext (sLit "Type variable:"))
@@ -1243,7 +1208,7 @@ mkTyCoAppErrMsg tyvar arg_co
 	  hang (ptext (sLit "Arg coercion:"))   
 	         4 (ppr arg_co <+> dcolon <+> pprEqPred (coercionKind arg_co))]
 
-mkTyAppMsg :: Type -> Type -> Message
+mkTyAppMsg :: Type -> Type -> MsgDoc
 mkTyAppMsg ty arg_ty
   = vcat [text "Illegal type application:",
 	      hang (ptext (sLit "Exp type:"))
@@ -1251,7 +1216,7 @@ mkTyAppMsg ty arg_ty
 	      hang (ptext (sLit "Arg type:"))   
 	         4 (ppr arg_ty <+> dcolon <+> ppr (typeKind arg_ty))]
 
-mkRhsMsg :: Id -> Type -> Message
+mkRhsMsg :: Id -> Type -> MsgDoc
 mkRhsMsg binder ty
   = vcat
     [hsep [ptext (sLit "The type of this binder doesn't match the type of its RHS:"),
@@ -1259,14 +1224,14 @@ mkRhsMsg binder ty
      hsep [ptext (sLit "Binder's type:"), ppr (idType binder)],
      hsep [ptext (sLit "Rhs type:"), ppr ty]]
 
-mkRhsPrimMsg :: Id -> CoreExpr -> Message
+mkRhsPrimMsg :: Id -> CoreExpr -> MsgDoc
 mkRhsPrimMsg binder _rhs
   = vcat [hsep [ptext (sLit "The type of this binder is primitive:"),
 		     ppr binder],
 	      hsep [ptext (sLit "Binder's type:"), ppr (idType binder)]
 	     ]
 
-mkStrictMsg :: Id -> Message
+mkStrictMsg :: Id -> MsgDoc
 mkStrictMsg binder
   = vcat [hsep [ptext (sLit "Recursive or top-level binder has strict demand info:"),
 		     ppr binder],
@@ -1274,7 +1239,7 @@ mkStrictMsg binder
 	     ]
 
 
-mkKindErrMsg :: TyVar -> Type -> Message
+mkKindErrMsg :: TyVar -> Type -> MsgDoc
 mkKindErrMsg tyvar arg_ty
   = vcat [ptext (sLit "Kinds don't match in type application:"),
 	  hang (ptext (sLit "Type variable:"))
@@ -1282,7 +1247,7 @@ mkKindErrMsg tyvar arg_ty
 	  hang (ptext (sLit "Arg type:"))   
 	         4 (ppr arg_ty <+> dcolon <+> ppr (typeKind arg_ty))]
 
-mkArityMsg :: Id -> Message
+mkArityMsg :: Id -> MsgDoc
 mkArityMsg binder
   = vcat [hsep [ptext (sLit "Demand type has "),
                      ppr (dmdTypeDepth dmd_ty),
@@ -1295,24 +1260,24 @@ mkArityMsg binder
          ]
            where (StrictSig dmd_ty) = idStrictness binder
 
-mkUnboxedTupleMsg :: Id -> Message
+mkUnboxedTupleMsg :: Id -> MsgDoc
 mkUnboxedTupleMsg binder
   = vcat [hsep [ptext (sLit "A variable has unboxed tuple type:"), ppr binder],
 	  hsep [ptext (sLit "Binder's type:"), ppr (idType binder)]]
 
-mkCastErr :: Type -> Type -> Message
+mkCastErr :: Type -> Type -> MsgDoc
 mkCastErr from_ty expr_ty
   = vcat [ptext (sLit "From-type of Cast differs from type of enclosed expression"),
 	  ptext (sLit "From-type:") <+> ppr from_ty,
 	  ptext (sLit "Type of enclosed expr:") <+> ppr expr_ty
     ]
 
-dupVars :: [[Var]] -> Message
+dupVars :: [[Var]] -> MsgDoc
 dupVars vars
   = hang (ptext (sLit "Duplicate variables brought into scope"))
        2 (ppr vars)
 
-dupExtVars :: [[Name]] -> Message
+dupExtVars :: [[Name]] -> MsgDoc
 dupExtVars vars
   = hang (ptext (sLit "Duplicate top-level variables with the same qualified name"))
        2 (ppr vars)
@@ -1345,7 +1310,7 @@ lintSplitCoVar cv
       Nothing -> failWithL (sep [ ptext (sLit "Coercion variable with non-equality kind:")
                                 , nest 2 (ppr cv <+> dcolon <+> ppr (tyVarKind cv))])
 
-mkCoVarLetErr :: CoVar -> Coercion -> Message
+mkCoVarLetErr :: CoVar -> Coercion -> MsgDoc
 mkCoVarLetErr covar co
   = vcat [ptext (sLit "Bad `let' binding for coercion variable:"),
 	  hang (ptext (sLit "Coercion variable:"))
@@ -1353,7 +1318,7 @@ mkCoVarLetErr covar co
 	  hang (ptext (sLit "Arg coercion:"))   
 	         4 (ppr co)]
 
-mkCoAppErrMsg :: CoVar -> Coercion -> Message
+mkCoAppErrMsg :: CoVar -> Coercion -> MsgDoc
 mkCoAppErrMsg covar arg_co
   = vcat [ptext (sLit "Kinds don't match in coercion application:"),
 	  hang (ptext (sLit "Coercion variable:"))
@@ -1362,7 +1327,7 @@ mkCoAppErrMsg covar arg_co
 	         4 (ppr arg_co <+> dcolon <+> pprEqPred (coercionKind arg_co))]
 
 
-mkCoAppMsg :: Type -> Coercion -> Message
+mkCoAppMsg :: Type -> Coercion -> MsgDoc
 mkCoAppMsg ty arg_co
   = vcat [text "Illegal type application:",
 	      hang (ptext (sLit "exp type:"))

@@ -41,6 +41,7 @@ module StaticFlags (
 	opt_SuppressTypeApplications,
 	opt_SuppressIdInfo,
 	opt_SuppressTypeSignatures,
+        opt_SuppressVarKinds,
 
 	-- profiling opts
 	opt_SccProfilingOn,
@@ -61,6 +62,7 @@ module StaticFlags (
 	opt_SimplExcessPrecision,
 	opt_NoOptCoercion,
 	opt_MaxWorkerArgs,
+        opt_AggressivePrimOps,
 
 	-- Unfolding control
 	opt_UF_CreationThreshold,
@@ -223,6 +225,11 @@ opt_SuppressCoercions
 	=  lookUp  (fsLit "-dsuppress-all")
 	|| lookUp  (fsLit "-dsuppress-coercions")
 
+opt_SuppressVarKinds :: Bool
+opt_SuppressVarKinds
+	=  lookUp  (fsLit "-dsuppress-all")
+	|| lookUp  (fsLit "-dsuppress-var-kinds")
+
 -- | Suppress module id prefixes on variables.
 opt_SuppressModulePrefixes :: Bool
 opt_SuppressModulePrefixes
@@ -315,6 +322,11 @@ opt_NoStateHack			= lookUp  (fsLit "-fno-state-hack")
 opt_CprOff :: Bool
 opt_CprOff			= lookUp  (fsLit "-fcpr-off")
 	-- Switch off CPR analysis in the new demand analyser
+
+opt_AggressivePrimOps :: Bool
+opt_AggressivePrimOps		= lookUp  (fsLit "-faggressive-primops")
+        -- See Note [Aggressive PrimOps] in PrimOp
+
 opt_MaxWorkerArgs :: Int
 opt_MaxWorkerArgs		= lookup_def_int "-fmax-worker-args" (10::Int)
 

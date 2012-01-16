@@ -96,7 +96,6 @@ ifeq "$(findstring clean,$(MAKECMDGOALS))" ""
 ifneq "$$($1_$2_INSTALL_INPLACE)" "NO"
 $$($1_$2_INPLACE) : $1/$2/build/tmp/$$($1_$2_PROG) | $$$$(dir $$$$@)/.
 	"$$(CP)" -p $$< $$@
-	touch $$@
 endif
 endif
 

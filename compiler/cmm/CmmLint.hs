@@ -133,7 +133,7 @@ lintCmmStmt platform labels = lint
             _ <- lintCmmExpr platform l
             _ <- lintCmmExpr platform r
             return ()
-          lint (CmmCall target _res args _ _) =
+          lint (CmmCall target _res args _) =
               lintTarget platform target >> mapM_ (lintCmmExpr platform . hintlessCmm) args
           lint (CmmCondBranch e id) = checkTarget id >> lintCmmExpr platform e >> checkCond platform e
           lint (CmmSwitch e branches) = do
@@ -143,9 +143,9 @@ lintCmmStmt platform labels = lint
               then return ()
               else cmmLintErr (text "switch scrutinee is not a word: " <> pprPlatform platform e <>
                                text " :: " <> ppr erep)
-          lint (CmmJump e args) = lintCmmExpr platform e >> mapM_ (lintCmmExpr platform . hintlessCmm) args
-          lint (CmmReturn ress) = mapM_ (lintCmmExpr platform . hintlessCmm) ress
-          lint (CmmBranch id)    = checkTarget id
+          lint (CmmJump e _) = lintCmmExpr platform e >> return ()
+          lint (CmmReturn) = return ()
+          lint (CmmBranch id) = checkTarget id
           checkTarget id = if setMember id labels then return ()
                            else cmmLintErr (text "Branch to nonexistent id" <+> ppr id)
 

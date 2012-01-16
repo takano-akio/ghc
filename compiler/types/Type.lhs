@@ -36,7 +36,7 @@ module Type (
 
 	mkTyConApp, mkTyConTy,
 	tyConAppTyCon_maybe, tyConAppArgs_maybe, tyConAppTyCon, tyConAppArgs, 
-	splitTyConApp_maybe, splitTyConApp, 
+	splitTyConApp_maybe, splitTyConApp, tyConAppArgN,
 
         mkForAllTy, mkForAllTys, splitForAllTy_maybe, splitForAllTys, 
         mkPiKinds, mkPiType, mkPiTypes,
@@ -503,6 +503,13 @@ tyConAppArgs_maybe _                = Nothing
 tyConAppArgs :: Type -> [Type]
 tyConAppArgs ty = tyConAppArgs_maybe ty `orElse` pprPanic "tyConAppArgs" (ppr ty)
 
+tyConAppArgN :: Int -> Type -> Type
+-- Executing Nth
+tyConAppArgN n ty 
+  = case tyConAppArgs_maybe ty of
+      Just tys -> ASSERT2( n < length tys, ppr n <+> ppr tys ) tys !! n
+      Nothing  -> pprPanic "tyConAppArgN" (ppr n <+> ppr ty)
+
 -- | Attempts to tease a type apart into a type constructor and the application
 -- of a number of arguments to that constructor. Panics if that is not possible.
 -- See also 'splitTyConApp_maybe'
@@ -647,20 +654,22 @@ carefullySplitNewType_maybe rec_nts tc tys
 -- of inspecting the type directly.
 
 -- | Discovers the primitive representation of a more abstract 'Type'
+-- Only applied to types of values
 typePrimRep :: Type -> PrimRep
 typePrimRep ty = case repType ty of
 		   TyConApp tc _ -> tyConPrimRep tc
 		   FunTy _ _	 -> PtrRep
-		   AppTy _ _	 -> PtrRep	-- See note below
+		   AppTy _ _	 -> PtrRep	-- See Note [AppTy rep] 
 		   TyVarTy _	 -> PtrRep
 		   _             -> pprPanic "typePrimRep" (ppr ty)
-	-- Types of the form 'f a' must be of kind *, not *#, so
-	-- we are guaranteed that they are represented by pointers.
-	-- The reason is that f must have kind *->*, not *->*#, because
-	-- (we claim) there is no way to constrain f's kind any other
-	-- way.
 \end{code}
 
+Note [AppTy rep]
+~~~~~~~~~~~~~~~~
+Types of the form 'f a' must be of kind *, not #, so we are guaranteed
+that they are represented by pointers.  The reason is that f must have
+kind (kk -> kk) and kk cannot be unlifted; see Note [The kind invariant] 
+in TypeRep.
 
 ---------------------------------------------------------------------
 				ForAllTy

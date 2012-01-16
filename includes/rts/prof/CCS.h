@@ -29,29 +29,30 @@ int rts_isProfiled(void);
  * generator (compiler/codeGen/CgProf.hs).
  */
 
-typedef struct _CostCentre {
+typedef struct CostCentre_ {
     StgInt ccID;              // Unique Id, allocated by the RTS
 
     char * label;
     char * module;
+    char * srcloc;
 
     // used for accumulating costs at the end of the run...
-    StgWord   time_ticks;
     StgWord64 mem_alloc;      // align 8 (Note [struct alignment])
+    StgWord   time_ticks;
 
     StgInt is_caf;            // non-zero for a CAF cost centre
 
-    struct _CostCentre *link;
+    struct CostCentre_ *link;
 } CostCentre;
 
-typedef struct _CostCentreStack {
+typedef struct CostCentreStack_ {
     StgInt ccsID;               // unique ID, allocated by the RTS
 
     CostCentre *cc;             // Cost centre at the top of the stack
 
-    struct _CostCentreStack *prevStack;   // parent
-    struct _IndexTable      *indexTable;  // children
-    struct _CostCentreStack *root;        // root of stack
+    struct CostCentreStack_ *prevStack;   // parent
+    struct IndexTable_      *indexTable;  // children
+    struct CostCentreStack_ *root;        // root of stack
     StgWord    depth;           // number of items in the stack
 
     StgWord64  scc_count;       // Count of times this CCS is entered
@@ -102,10 +103,10 @@ typedef struct _CostCentreStack {
 // subsequent times we push a certain CC on a CCS we get the same
 // result).
 
-typedef struct _IndexTable {
+typedef struct IndexTable_ {
     CostCentre *cc;
     CostCentreStack *ccs;
-    struct _IndexTable *next;
+    struct IndexTable_ *next;
     unsigned int back_edge;
 } IndexTable;
 
@@ -114,8 +115,6 @@ typedef struct _IndexTable {
    Pre-defined cost centres and cost centre stacks
    -------------------------------------------------------------------------- */
 
-extern CostCentreStack * RTS_VAR(CCCS);	        /* current CCS */
- 
 #if IN_STG_CODE
 
 extern StgWord CC_MAIN[];	
@@ -153,6 +152,9 @@ extern CostCentreStack CCS_DONT_CARE[];  // shouldn't ever get set
 extern CostCentre      CC_PINNED[];
 extern CostCentreStack CCS_PINNED[];     // pinned memory
 
+extern CostCentre      CC_IDLE[];
+extern CostCentreStack CCS_IDLE[];       // capability is idle
+
 #endif /* IN_STG_CODE */
 
 extern unsigned int RTS_VAR(CC_ID);     // global ids
@@ -165,7 +167,7 @@ extern unsigned int RTS_VAR(era);
  * ---------------------------------------------------------------------------*/
 
 CostCentreStack * pushCostCentre (CostCentreStack *, CostCentre *);
-void              enterFunCCS    (CostCentreStack *);
+void              enterFunCCS    (StgRegTable *reg, CostCentreStack *);
 
 /* -----------------------------------------------------------------------------
    Registering CCs and CCSs
@@ -202,11 +204,12 @@ extern CostCentreStack * RTS_VAR(CCS_LIST);         // registered CCS list
  * Declaring Cost Centres & Cost Centre Stacks.
  * -------------------------------------------------------------------------- */
 
-# define CC_DECLARE(cc_ident,name,mod,caf,is_local)     \
+# define CC_DECLARE(cc_ident,name,mod,loc,caf,is_local) \
      is_local CostCentre cc_ident[1]                    \
        = {{ ccID       : 0,                             \
             label      : name,                          \
             module     : mod,                           \
+            srcloc     : loc,                           \
             time_ticks : 0,                             \
             mem_alloc  : 0,                             \
             link       : 0,                             \

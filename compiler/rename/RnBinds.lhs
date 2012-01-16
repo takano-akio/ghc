@@ -35,6 +35,7 @@ import {-# SOURCE #-} RnExpr( rnLExpr, rnStmts )
 import HsSyn
 import RnHsSyn
 import TcRnMonad
+import TcEvidence     ( emptyTcEvBinds )
 import RnTypes        ( rnIPName, rnHsSigType, rnLHsType, checkPrecMatch )
 import RnPat
 import RnEnv
@@ -727,14 +728,14 @@ okHsSig ctxt (L _ sig)
      (GenericSig {}, ClsDeclCtxt {}) -> True
      (GenericSig {}, _)              -> False
 
-     (TypeSig {}, InstDeclCtxt {}) -> False
-     (TypeSig {}, _)               -> True
+     (TypeSig {}, _)              -> True
 
      (FixSig {}, InstDeclCtxt {}) -> False
      (FixSig {}, _)               -> True
 
-     (IdSig {}, TopSigCtxt) -> True
-     (IdSig {}, _)          -> False
+     (IdSig {}, TopSigCtxt)      -> True
+     (IdSig {}, InstDeclCtxt {}) -> True
+     (IdSig {}, _)               -> False
 
      (InlineSig {}, HsBootCtxt) -> False
      (InlineSig {}, _)          -> True

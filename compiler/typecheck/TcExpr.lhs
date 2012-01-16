@@ -31,7 +31,8 @@ import TcUnify
 import BasicTypes
 import Inst
 import TcBinds
-import FamInst( tcLookupFamInst )
+import FamInst          ( tcLookupFamInst )
+import FamInstEnv       ( famInstAxiom, dataFamInstRepTyCon )
 import TcEnv
 import TcArrows
 import TcMatches
@@ -46,7 +47,7 @@ import Name
 import TyCon
 import Type
 import Kind( splitKiTyVars )
-import Coercion
+import TcEvidence
 import Var
 import VarSet
 import VarEnv
@@ -680,7 +681,7 @@ tcExpr (RecordUpd record_expr rbinds _ _ _) res_ty
 
 	-- Step 7: make a cast for the scrutinee, in the case that it's from a type family
 	; let scrut_co | Just co_con <- tyConFamilyCoercion_maybe tycon 
-		       = WpCast (mkAxInstCo co_con scrut_inst_tys)
+		       = WpCast (mkTcAxInstCo co_con scrut_inst_tys)
 		       | otherwise
 		       = idHsWrapper
 	-- Phew!
@@ -922,7 +923,7 @@ tcTupArgs args tys
 
 ----------------
 unifyOpFunTysWrap :: LHsExpr Name -> Arity -> TcRhoType
-                  -> TcM (LCoercion, [TcSigmaType], TcRhoType)	 		
+                  -> TcM (TcCoercion, [TcSigmaType], TcRhoType)	 		
 -- A wrapper for matchExpectedFunTys
 unifyOpFunTysWrap op arity ty = matchExpectedFunTys herald arity ty
   where
@@ -1149,22 +1150,22 @@ tcTagToEnum loc fun_name arg res_ty
     doc3 = ptext (sLit "No family instance for this type")
 
     get_rep_ty :: TcType -> TyCon -> [TcType]
-               -> TcM (LCoercion, TyCon, [TcType])
+               -> TcM (TcCoercion, TyCon, [TcType])
     	-- Converts a family type (eg F [a]) to its rep type (eg FList a)
 	-- and returns a coercion between the two
     get_rep_ty ty tc tc_args
       | not (isFamilyTyCon tc) 
-      = return (mkReflCo ty, tc, tc_args)
+      = return (mkTcReflCo ty, tc, tc_args)
       | otherwise 
       = do { mb_fam <- tcLookupFamInst tc tc_args
            ; case mb_fam of 
 	       Nothing -> failWithTc (tagToEnumError ty doc3)
-               Just (rep_tc, rep_args) 
-                   -> return ( mkSymCo (mkAxInstCo co_tc rep_args)
+               Just (rep_fam, rep_args) 
+                   -> return ( mkTcSymCo (mkTcAxInstCo co_tc rep_args)
                              , rep_tc, rep_args )
                  where
-                   co_tc = expectJust "tcTagToEnum" $
-                           tyConFamilyCoercion_maybe rep_tc }
+                   co_tc  = famInstAxiom rep_fam
+                   rep_tc = dataFamInstRepTyCon rep_fam }
 
 tagToEnumError :: TcType -> SDoc -> SDoc
 tagToEnumError ty what
@@ -1394,7 +1395,7 @@ funAppCtxt fun arg arg_no
        2 (quotes (ppr arg))
 
 funResCtxt :: LHsExpr Name -> TcType -> TcType 
-           -> TidyEnv -> TcM (TidyEnv, Message)
+           -> TidyEnv -> TcM (TidyEnv, MsgDoc)
 -- When we have a mis-match in the return type of a function
 -- try to give a helpful message about too many/few arguments
 funResCtxt fun fun_res_ty res_ty env0

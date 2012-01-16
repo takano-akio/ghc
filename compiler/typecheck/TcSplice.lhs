@@ -32,6 +32,7 @@ import TcHsSyn
 import TcSimplify
 import TcUnify
 import Type
+import Kind
 import TcType
 import TcEnv
 import TcMType
@@ -55,6 +56,7 @@ import Class
 import Inst
 import TyCon
 import DataCon
+import TcEvidence( TcEvBinds(..) )
 import Id
 import IdInfo
 import DsMeta
@@ -367,14 +369,15 @@ tc_bracket :: ThStage -> HsBracket Name -> TcM TcType
 tc_bracket outer_stage br@(VarBr _ name)     -- Note [Quoting names]
   = do  { thing <- tcLookup name
         ; case thing of
-            AGlobal _ -> return ()
+            AGlobal {} -> return ()
+            ATyVar {}  -> return ()
             ATcId { tct_level = bind_lvl, tct_id = id }
                 | thTopLevelId id       -- C.f TcExpr.checkCrossStageLifting
                 -> keepAliveTc id
                 | otherwise
                 -> do { checkTc (thLevel outer_stage + 1 == bind_lvl)
                                 (quotedNameStageErr br) }
-            _ -> pprPanic "th_bracket" (ppr name)
+            _ -> pprPanic "th_bracket" (ppr name $$ ppr thing)
 
         ; tcMetaTy nameTyConName        -- Result type is Var (not Q-monadic)
         }
@@ -745,7 +748,7 @@ deprecatedDollar quoter
 data MetaOps th_syn hs_syn
   = MT { mt_desc :: String             -- Type of beast (expression, type etc)
        , mt_show :: th_syn -> String   -- How to show the th_syn thing
-       , mt_cvt  :: SrcSpan -> th_syn -> Either Message hs_syn
+       , mt_cvt  :: SrcSpan -> th_syn -> Either MsgDoc hs_syn
                                        -- How to convert to hs_syn
     }
 
@@ -798,7 +801,7 @@ runMetaD = runMetaQ declMetaOps
 ---------------
 runMeta :: (Outputable hs_syn)
         => Bool                 -- Whether code should be printed in the exception message
-        -> (SrcSpan -> x -> TcM (Either Message hs_syn))        -- How to run x
+        -> (SrcSpan -> x -> TcM (Either MsgDoc hs_syn))        -- How to run x
         -> LHsExpr Id           -- Of type x; typically x = Q TH.Exp, or something like that
         -> TcM hs_syn           -- Of type t
 runMeta show_code run_and_convert expr
@@ -899,8 +902,8 @@ instance TH.Quasi (IOEnv (Env TcGblEnv TcLclEnv)) where
                   ; let i = getKey u
                   ; return (TH.mkNameU s i) }
 
-  qReport True msg  = addErr (text msg)
-  qReport False msg = addReport (text msg) empty
+  qReport True msg  = addErr  (text msg)
+  qReport False msg = addWarn (text msg)
 
   qLocation = do { m <- getModule
                  ; l <- getSrcSpanM
@@ -1187,29 +1190,30 @@ reifyTyCon tc
   = do { let flavour = reifyFamFlavour tc
              tvs     = tyConTyVars tc
              kind    = tyConKind tc
-             kind'
-               | isLiftedTypeKind kind = Nothing
-               | otherwise             = Just $ reifyKind kind
+       ; kind' <- if isLiftedTypeKind kind then return Nothing
+                  else fmap Just (reifyKind kind)
 
        ; fam_envs <- tcGetFamInstEnvs
        ; instances <- mapM reifyFamilyInstance (familyInstances fam_envs tc)
+       ; tvs' <- reifyTyVars tvs
        ; return (TH.FamilyI
-                    (TH.FamilyD flavour (reifyName tc) (reifyTyVars tvs) kind')
+                    (TH.FamilyD flavour (reifyName tc) tvs' kind')
                     instances) }
 
   | isSynTyCon tc
   = do { let (tvs, rhs) = synTyConDefn tc
        ; rhs' <- reifyType rhs
+       ; tvs' <- reifyTyVars tvs
        ; return (TH.TyConI
-                   (TH.TySynD (reifyName tc) (reifyTyVars tvs) rhs'))
+                   (TH.TySynD (reifyName tc) tvs' rhs'))
        }
 
   | otherwise
   = do  { cxt <- reifyCxt (tyConStupidTheta tc)
         ; let tvs = tyConTyVars tc
         ; cons <- mapM (reifyDataCon (mkTyVarTys tvs)) (tyConDataCons tc)
+        ; r_tvs <- reifyTyVars tvs
         ; let name = reifyName tc
-              r_tvs  = reifyTyVars tvs
               deriv = []        -- Don't know about deriving
               decl | isNewTyCon tc = TH.NewtypeD cxt name r_tvs (head cons) deriv
                    | otherwise     = TH.DataD    cxt name r_tvs cons        deriv
@@ -1244,7 +1248,8 @@ reifyDataCon tys dc
              return main_con
          else do
          { cxt <- reifyCxt theta'
-         ; return (TH.ForallC (reifyTyVars ex_tvs') cxt main_con) } }
+         ; ex_tvs'' <- reifyTyVars ex_tvs'
+         ; return (TH.ForallC ex_tvs'' cxt main_con) } }
 
 ------------------------------
 reifyClass :: Class -> TcM TH.Info
@@ -1253,7 +1258,8 @@ reifyClass cls
         ; inst_envs <- tcGetInstEnvs
         ; insts <- mapM reifyClassInstance (InstEnv.classInstances inst_envs cls)
         ; ops <- mapM reify_op op_stuff
-        ; let dec = TH.ClassD cxt (reifyName cls) (reifyTyVars tvs) fds' ops
+        ; tvs' <- reifyTyVars tvs
+        ; let dec = TH.ClassD cxt (reifyName cls) tvs' fds' ops
         ; return (TH.ClassI dec insts ) }
   where
     (tvs, fds, theta, _, _, op_stuff) = classExtraBigSig cls
@@ -1262,7 +1268,7 @@ reifyClass cls
                           ; return (TH.SigD (reifyName op) ty) }
 
 ------------------------------
-reifyClassInstance :: Instance -> TcM TH.Dec
+reifyClassInstance :: ClsInst -> TcM TH.Dec
 reifyClassInstance i
   = do { cxt <- reifyCxt theta
        ; thtypes <- reifyTypes types
@@ -1274,21 +1280,22 @@ reifyClassInstance i
 ------------------------------
 reifyFamilyInstance :: FamInst -> TcM TH.Dec
 reifyFamilyInstance fi
-  | isSynTyCon rep_tc
-  = do { th_tys <- reifyTypes (fi_tys fi)
-       ; rhs_ty <- reifyType (synTyConType rep_tc)
-       ; return (TH.TySynInstD fam th_tys rhs_ty) }
+  = case fi_flavor fi of
+      SynFamilyInst ->
+        do { th_tys <- reifyTypes (fi_tys fi)
+           ; rhs_ty <- reifyType (coAxiomRHS rep_ax)
+           ; return (TH.TySynInstD fam th_tys rhs_ty) }
 
-  | otherwise
-  = do { let tvs = tyConTyVars rep_tc
-             fam = reifyName (fi_fam fi)
-       ; cons <- mapM (reifyDataCon (mkTyVarTys tvs)) (tyConDataCons rep_tc)
-       ; th_tys <- reifyTypes (fi_tys fi)
-       ; return (if isNewTyCon rep_tc
-                 then TH.NewtypeInstD [] fam th_tys (head cons) []
-                 else TH.DataInstD    [] fam th_tys cons        []) }
+      DataFamilyInst rep_tc ->
+        do { let tvs = tyConTyVars rep_tc
+                 fam = reifyName (fi_fam fi)
+           ; cons <- mapM (reifyDataCon (mkTyVarTys tvs)) (tyConDataCons rep_tc)
+           ; th_tys <- reifyTypes (fi_tys fi)
+           ; return (if isNewTyCon rep_tc
+                     then TH.NewtypeInstD [] fam th_tys (head cons) []
+                     else TH.DataInstD    [] fam th_tys cons        []) }
   where
-    rep_tc = fi_tycon fi
+    rep_ax = fi_axiom fi
     fam = reifyName (fi_fam fi)
 
 ------------------------------
@@ -1306,24 +1313,23 @@ reify_for_all :: TypeRep.Type -> TcM TH.Type
 reify_for_all ty
   = do { cxt' <- reifyCxt cxt;
        ; tau' <- reifyType tau
-       ; return (TH.ForallT (reifyTyVars tvs) cxt' tau') }
+       ; tvs' <- reifyTyVars tvs
+       ; return (TH.ForallT tvs' cxt' tau') }
   where
     (tvs, cxt, tau) = tcSplitSigmaTy ty
 
 reifyTypes :: [Type] -> TcM [TH.Type]
 reifyTypes = mapM reifyType
 
-reifyKind :: Kind -> TH.Kind
+reifyKind :: Kind -> TcM TH.Kind
 reifyKind  ki
-  = let (kis, ki') = splitKindFunTys ki
-        kis_rep    = map reifyKind kis
-        ki'_rep    = reifyNonArrowKind ki'
-    in
-    foldr TH.ArrowK ki'_rep kis_rep
+  = do { let (kis, ki') = splitKindFunTys ki
+       ; ki'_rep <- reifyNonArrowKind ki'
+       ; kis_rep <- mapM reifyKind kis
+       ; return (foldr TH.ArrowK ki'_rep kis_rep) }
   where
-    reifyNonArrowKind k | isLiftedTypeKind k = TH.StarK
-                        | otherwise          = pprPanic "Exotic form of kind"
-                                                        (ppr k)
+    reifyNonArrowKind k | isLiftedTypeKind k = return TH.StarK 
+                        | otherwise          = noTH (sLit "this kind") (ppr k)
 
 reifyCxt :: [PredType] -> TcM [TH.Pred]
 reifyCxt   = mapM reifyPred
@@ -1337,11 +1343,12 @@ reifyFamFlavour tc | isSynFamilyTyCon tc = TH.TypeFam
                    | otherwise
                    = panic "TcSplice.reifyFamFlavour: not a type family"
 
-reifyTyVars :: [TyVar] -> [TH.TyVarBndr]
-reifyTyVars = map reifyTyVar
+reifyTyVars :: [TyVar] -> TcM [TH.TyVarBndr]
+reifyTyVars = mapM reifyTyVar
   where
-    reifyTyVar tv | isLiftedTypeKind kind = TH.PlainTV  name
-                  | otherwise             = TH.KindedTV name (reifyKind kind)
+    reifyTyVar tv | isLiftedTypeKind kind = return (TH.PlainTV  name)
+                  | otherwise             = do kind' <- reifyKind kind
+                                               return (TH.KindedTV name kind')
       where
         kind = tyVarKind tv
         name = reifyName tv

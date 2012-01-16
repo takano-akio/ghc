@@ -120,7 +120,7 @@ deSugar hsc_env
                               else return (binds, hpcInfo, emptyModBreaks)
 
                      initDs hsc_env mod rdr_env type_env $ do
-                       do { ds_ev_binds <- dsEvBinds ev_binds
+                       do { let ds_ev_binds = dsEvBinds ev_binds
                           ; core_prs <- dsTopLHsBinds binds_cvr
                           ; (spec_prs, spec_rules) <- dsImpSpecs imp_specs
                           ; (ds_fords, foreign_prs) <- dsForeigns fords
@@ -153,14 +153,8 @@ deSugar hsc_env
         -- You might think it doesn't matter, but the simplifier brings all top-level
         -- things into the in-scope set before simplifying; so we get no unfolding for F#!
 
-        -- Lint result if necessary, and print
-{-
-        ; dumpIfSet_dyn dflags Opt_D_dump_ds "Desugared, before opt" $
-               (vcat [ pprCoreBindings final_pgm
-                     , pprRules rules_for_imps ])
--}
-
 #ifdef DEBUG
+          -- Debug only as pre-simple-optimisation program may be really big
         ; endPass dflags CoreDesugar final_pgm rules_for_imps 
 #endif
         ; (ds_binds, ds_rules_for_imps, ds_vects) 

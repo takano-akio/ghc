@@ -13,6 +13,7 @@ import HscTypes
 import Name
 import Fingerprint
 -- import Outputable
+import StaticFlags
 
 import qualified Data.IntSet as IntSet
 import System.FilePath (normalise)
@@ -40,8 +41,13 @@ fingerprintDynFlags DynFlags{..} nameio =
         -- -i, -osuf, -hcsuf, -hisuf, -odir, -hidir, -stubdir, -o, -ohi
         paths = (map normalise importPaths,
                    [ objectSuf, hcSuf, hiSuf ],
-                   [ objectDir, hiDir, stubDir, outputFile, outputHi ])
+                   [ objectDir, hiDir, stubDir, outputHi ])
+                   -- NB. not outputFile, we don't want "ghc --make M -o <file>"
+                   -- to force recompilation when <file> changes.
+
+        -- -fprof-auto etc.
+        prof = if opt_SccProfilingOn then fromEnum profAuto else 0
 
     in -- pprTrace "flags" (ppr (mainis, safeHs, lang, cpp, paths)) $
-       computeFingerprint nameio (mainis, safeHs, lang, cpp, paths)
+       computeFingerprint nameio (mainis, safeHs, lang, cpp, paths, prof)
 

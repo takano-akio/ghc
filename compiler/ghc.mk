@@ -258,7 +258,7 @@ PRIMOP_BITS = compiler/primop-data-decl.hs-incl        \
               compiler/primop-strictness.hs-incl       \
               compiler/primop-primop-info.hs-incl
 
-compiler_CPP_OPTS += -I$(GHC_INCLUDE_DIR)
+compiler_CPP_OPTS += $(addprefix -I,$(GHC_INCLUDE_DIRS))
 compiler_CPP_OPTS += ${GhcCppOpts}
 
 $(PRIMOPS_TXT) compiler/parser/Parser.y: %: %.pp compiler/stage1/$(PLATFORM_H)
@@ -497,7 +497,7 @@ compiler/hsSyn/HsLit_HC_OPTS     += -fomit-interface-pragmas
 endif
 
 # LibFFI.hs #includes ffi.h
-compiler/stage2/build/LibFFI.hs : $(ffi_HEADER)
+compiler/stage2/build/LibFFI.hs : $(libffi_HEADERS)
 # On Windows it seems we also need to link directly to libffi
 ifeq  "$(HOSTPLATFORM)" "i386-unknown-mingw32"
 define windowsDynLinkToFfi

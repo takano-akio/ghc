@@ -7,15 +7,15 @@
 -----------------------------------------------------------------------------
 
 module CgForeignCall (
-  cgForeignCall,
-  emitForeignCall,
-  emitForeignCall',
-  shimForeignCallArg,
-  emitSaveThreadState, -- will be needed by the Cmm parser
-  emitLoadThreadState, -- ditto
-  emitCloseNursery,
-  emitOpenNursery,
- ) where
+        cgForeignCall,
+        emitForeignCall,
+        emitForeignCall',
+        shimForeignCallArg,
+        emitSaveThreadState, -- will be needed by the Cmm parser
+        emitLoadThreadState, -- ditto
+        emitCloseNursery,
+        emitOpenNursery,
+    ) where
 
 import StgSyn
 import CgProf
@@ -127,7 +127,7 @@ emitForeignCall' safety results target args vols _srt ret
     let (caller_save, caller_load) = callerSaveVolatileRegs vols
     let caller_load' = if ret == CmmNeverReturns then [] else caller_load
     stmtsC caller_save
-    stmtC (CmmCall target results temp_args CmmUnsafe ret)
+    stmtC (CmmCall target results temp_args ret)
     stmtsC caller_load'
 
   | otherwise = do
@@ -149,12 +149,12 @@ emitForeignCall' safety results target args vols _srt ret
                         [ CmmHinted id AddrHint ]
                         [ CmmHinted (CmmReg (CmmGlobal BaseReg)) AddrHint
                         , CmmHinted (CmmLit (CmmInt (fromIntegral (fromEnum (playInterruptible safety))) wordWidth)) NoHint]
-                        CmmUnsafe ret)
-    stmtC (CmmCall temp_target results temp_args CmmUnsafe ret)
+                        ret)
+    stmtC (CmmCall temp_target results temp_args ret)
     stmtC (CmmCall (CmmCallee resumeThread CCallConv)
                         [ CmmHinted new_base AddrHint ]
                         [ CmmHinted (CmmReg (CmmLocal id)) AddrHint ]
-                        CmmUnsafe ret)
+                        ret)
     -- Assign the result to BaseReg: we
     -- might now have a different Capability!
     stmtC (CmmAssign (CmmGlobal BaseReg) (CmmReg (CmmLocal new_base)))
@@ -240,8 +240,8 @@ emitLoadThreadState = do
   emitOpenNursery
   -- and load the current cost centre stack from the TSO when profiling:
   when opt_SccProfilingOn $
-        stmtC (CmmStore curCCSAddr
-                (CmmLoad (cmmOffset (CmmReg (CmmLocal tso)) tso_CCCS) bWord))
+        stmtC $ storeCurCCS $
+                  CmmLoad (cmmOffset (CmmReg (CmmLocal tso)) tso_CCCS) bWord
 
 emitOpenNursery :: Code
 emitOpenNursery = stmtsC [
@@ -271,7 +271,7 @@ nursery_bdescr_blocks = cmmOffset stgCurrentNursery oFFSET_bdescr_blocks
 
 tso_stackobj, tso_CCCS, stack_STACK, stack_SP :: ByteOff
 tso_stackobj = closureField oFFSET_StgTSO_stackobj
-tso_CCCS     = closureField oFFSET_StgTSO_CCCS
+tso_CCCS     = closureField oFFSET_StgTSO_cccs
 stack_STACK  = closureField oFFSET_StgStack_stack
 stack_SP     = closureField oFFSET_StgStack_sp
 

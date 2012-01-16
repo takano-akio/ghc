@@ -210,8 +210,8 @@ loadThreadState tso stack = do
         openNursery,
         -- and load the current cost centre stack from the TSO when profiling:
         if opt_SccProfilingOn then
-          mkStore curCCSAddr
-                  (CmmLoad (cmmOffset (CmmReg (CmmLocal tso)) tso_CCCS) ccsType)
+          storeCurCCS
+            (CmmLoad (cmmOffset (CmmReg (CmmLocal tso)) tso_CCCS) ccsType)
         else mkNop]
 emitLoadThreadState :: LocalReg -> LocalReg -> FCode ()
 emitLoadThreadState tso stack = emit $ loadThreadState tso stack
@@ -246,7 +246,7 @@ nursery_bdescr_blocks = cmmOffset stgCurrentNursery oFFSET_bdescr_blocks
 
 tso_stackobj, tso_CCCS, stack_STACK, stack_SP :: ByteOff
 tso_stackobj = closureField oFFSET_StgTSO_stackobj
-tso_CCCS     = closureField oFFSET_StgTSO_CCCS
+tso_CCCS     = closureField oFFSET_StgTSO_cccs
 stack_STACK  = closureField oFFSET_StgStack_stack
 stack_SP     = closureField oFFSET_StgStack_sp
 
