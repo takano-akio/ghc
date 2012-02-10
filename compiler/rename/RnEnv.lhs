@@ -39,7 +39,7 @@ module RnEnv (
 	addFvRn, mapFvRn, mapMaybeFvRn, mapFvRnCPS,
 	warnUnusedMatches,
 	warnUnusedTopBinds, warnUnusedLocalBinds,
-	dataTcOccs, unknownNameErr, kindSigErr, polyKindsErr, perhapsForallMsg,
+	dataTcOccs, unknownNameErr, kindSigErr, dataKindsErr, perhapsForallMsg,
 
         HsDocContext(..), docOfHsDocContext
     ) where
@@ -470,9 +470,9 @@ lookupPromotedOccRn rdr_name
            Nothing -> unboundName WL_Any rdr_name
            Just demoted_name 
              | data_kinds -> return demoted_name
-             | otherwise  -> unboundNameX WL_Any rdr_name suggest_pk }}}
+             | otherwise  -> unboundNameX WL_Any rdr_name suggest_dk }}}
   where 
-    suggest_pk = ptext (sLit "A data constructor of that name is in scope; did you mean -XDataKinds?")
+    suggest_dk = ptext (sLit "A data constructor of that name is in scope; did you mean -XDataKinds?")
 \end{code}
 
 Note [Demotion]
@@ -1112,7 +1112,7 @@ checkShadowedOccs (global_env,local_env) loc_occs
 	-- Returns False for record selectors that are shadowed, when
 	-- punning or wild-cards are on (cf Trac #2723)
     is_shadowed_gre gre@(GRE { gre_par = ParentIs _ })
-	= do { dflags <- getDOpts
+	= do { dflags <- getDynFlags
 	     ; if (xopt Opt_RecordPuns dflags || xopt Opt_RecordWildCards dflags) 
 	       then do { is_fld <- is_rec_fld gre; return (not is_fld) }
 	       else return True }
@@ -1434,8 +1434,8 @@ kindSigErr thing
   = hang (ptext (sLit "Illegal kind signature for") <+> quotes (ppr thing))
        2 (ptext (sLit "Perhaps you intended to use -XKindSignatures"))
 
-polyKindsErr :: Outputable a => a -> SDoc
-polyKindsErr thing
+dataKindsErr :: Outputable a => a -> SDoc
+dataKindsErr thing
   = hang (ptext (sLit "Illegal kind:") <+> quotes (ppr thing))
        2 (ptext (sLit "Perhaps you intended to use -XDataKinds"))
 

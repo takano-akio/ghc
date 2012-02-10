@@ -211,6 +211,7 @@ ppLlvmStatement stmt =
   let ind = (text "  " <>)
   in case stmt of
         Assignment  dst expr      -> ind $ ppAssignment dst (ppLlvmExpression expr)
+        Fence       st ord        -> ind $ ppFence st ord
         Branch      target        -> ind $ ppBranch target
         BranchIf    cond ifT ifF  -> ind $ ppBranchIf cond ifT ifF
         Comment     comments      -> ind $ ppLlvmComments comments
@@ -310,6 +311,19 @@ ppAssignment var expr = (text $ getName var) <+> equals <+> expr
 -- unaligned. In the future we may be able to guarantee that certain vector
 -- access patterns are aligned, in which case we will need a more granular way
 -- of specifying alignment.
+ppFence :: Bool -> LlvmSyncOrdering -> Doc
+ppFence st ord =
+  let singleThread = case st of True  -> text "singlethread"
+                                False -> empty
+  in text "fence" <+> singleThread <+> ppSyncOrdering ord
+
+ppSyncOrdering :: LlvmSyncOrdering -> Doc
+ppSyncOrdering SyncUnord     = text "unordered"
+ppSyncOrdering SyncMonotonic = text "monotonic"
+ppSyncOrdering SyncAcquire   = text "acquire"
+ppSyncOrdering SyncRelease   = text "release"
+ppSyncOrdering SyncAcqRel    = text "acq_rel"
+ppSyncOrdering SyncSeqCst    = text "seq_cst"
 
 ppLoad :: LlvmVar -> Doc
 ppLoad var

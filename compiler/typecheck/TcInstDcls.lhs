@@ -371,17 +371,16 @@ tcInstDecls1 tycl_decls inst_decls deriv_decls
             -- round)
 
             -- (1) Do class and family instance declarations
-       ; fam_insts       <- mapAndRecoverM tcTopFamInstDecl $
-                            filter (isFamInstDecl . unLoc) tycl_decls
-       ; inst_decl_stuff <- mapAndRecoverM tcLocalInstDecl1  inst_decls
+       ; inst_decl_stuff <- mapAndRecoverM tcLocalInstDecl1 inst_decls
 
-       ; let { (local_info, at_fam_insts_s) = unzip inst_decl_stuff
-             ; all_fam_insts = concat at_fam_insts_s ++ fam_insts }
+       ; let { (local_infos_s, fam_insts_s) = unzip inst_decl_stuff
+             ; all_fam_insts = concat fam_insts_s
+             ; local_infos   = concat local_infos_s }
 
             -- (2) Next, construct the instance environment so far, consisting of
             --   (a) local instance decls
             --   (b) local family instance decls
-       ; addClsInsts local_info      $
+       ; addClsInsts local_infos     $
          addFamInsts all_fam_insts   $ do
 
             -- (3) Compute instances from "deriving" clauses;
@@ -399,17 +398,17 @@ tcInstDecls1 tycl_decls inst_decls deriv_decls
        -- Check that if the module is compiled with -XSafe, there are no
        -- hand written instances of Typeable as then unsafe casts could be
        -- performed. Derived instances are OK.
-       ; dflags <- getDOpts
+       ; dflags <- getDynFlags
        ; when (safeLanguageOn dflags) $
              mapM_ (\x -> when (typInstCheck x)
                                (addErrAt (getSrcSpan $ iSpec x) typInstErr))
-                   local_info
+                   local_infos
        -- As above but for Safe Inference mode.
        ; when (safeInferOn dflags) $
-             mapM_ (\x -> when (typInstCheck x) recordUnsafeInfer) local_info
+             mapM_ (\x -> when (typInstCheck x) recordUnsafeInfer) local_infos
 
        ; return ( gbl_env
-                , (bagToList deriv_inst_info) ++ local_info
+                , bagToList deriv_inst_info ++ local_infos
                 , deriv_binds)
     }}
   where
@@ -437,12 +436,18 @@ addFamInsts fam_insts thing_inside
 
 \begin{code}
 tcLocalInstDecl1 :: LInstDecl Name
-                 -> TcM (InstInfo Name, [FamInst])
+                 -> TcM ([InstInfo Name], [FamInst])
         -- A source-file instance declaration
         -- Type-check all the stuff before the "where"
         --
         -- We check for respectable instance type, and context
-tcLocalInstDecl1 (L loc (InstDecl poly_ty binds uprags ats))
+tcLocalInstDecl1 (L loc (FamInstDecl decl))
+  = setSrcSpan loc      $
+    tcAddDeclCtxt decl  $
+    do { fam_inst <- tcFamInstDecl TopLevel decl
+       ; return ([], [fam_inst]) }
+
+tcLocalInstDecl1 (L loc (ClsInstDecl poly_ty binds uprags ats))
   = setSrcSpan loc                      $
     addErrCtxt (instDeclCtxt1 poly_ty)  $
 
@@ -500,7 +505,7 @@ tcLocalInstDecl1 (L loc (InstDecl poly_ty binds uprags ats))
               ispec 	= mkLocalInstance dfun overlap_flag
               inst_info = InstInfo { iSpec  = ispec, iBinds = VanillaInst binds uprags False }
 
-        ; return ( inst_info, fam_insts0 ++ concat fam_insts1) }
+        ; return ( [inst_info], fam_insts0 ++ concat fam_insts1) }
 \end{code}
 
 %************************************************************************
@@ -515,12 +520,6 @@ lot of kinding and type checking code with ordinary algebraic data types (and
 GADTs).
 
 \begin{code}
-tcTopFamInstDecl :: LTyClDecl Name -> TcM FamInst
-tcTopFamInstDecl (L loc decl)
-  = setSrcSpan loc      $
-    tcAddDeclCtxt decl  $
-    tcFamInstDecl TopLevel decl
-
 tcFamInstDecl :: TopLevelFlag -> TyClDecl Name -> TcM FamInst
 tcFamInstDecl top_lvl decl
   = do { -- Type family instances require -XTypeFamilies
@@ -716,7 +715,7 @@ tcInstDecl2 (InstInfo { iSpec = ispec, iBinds = ibinds })
 
        -- Deal with 'SPECIALISE instance' pragmas
        -- See Note [SPECIALISE instance pragmas]
-       ; spec_info@(spec_inst_prags,_) <- tcSpecInstPrags dfun_id ibinds
+       ; spec_inst_info <- tcSpecInstPrags dfun_id ibinds
 
         -- Typecheck the methods
        ; (meth_ids, meth_binds)
@@ -725,7 +724,7 @@ tcInstDecl2 (InstInfo { iSpec = ispec, iBinds = ibinds })
                 -- Those tyvars are inside the dfun_id's type, which is a bit
                 -- bizarre, but OK so long as you realise it!
               tcInstanceMethods dfun_id clas inst_tyvars dfun_ev_vars
-                                inst_tys spec_info
+                                inst_tys spec_inst_info
                                 op_items ibinds
 
        -- Create the result bindings
@@ -776,7 +775,8 @@ tcInstDecl2 (InstInfo { iSpec = ispec, iBinds = ibinds })
                          map Var           meth_ids
 
              export = ABE { abe_wrap = idHsWrapper, abe_poly = dfun_id_w_fun
-                          , abe_mono = self_dict, abe_prags = SpecPrags spec_inst_prags }
+                          , abe_mono = self_dict, abe_prags = noSpecPrags }
+                          -- NB: noSpecPrags, see Note [SPECIALISE instance pragmas]
              main_bind = AbsBinds { abs_tvs = inst_tyvars
                                   , abs_ev_vars = dfun_ev_vars
                                   , abs_exports = [export]
@@ -895,16 +895,12 @@ Consider
      range (x,y) = ...
 
 We do *not* want to make a specialised version of the dictionary
-function.  Rather, we want specialised versions of each method.
+function.  Rather, we want specialised versions of each *method*.
 Thus we should generate something like this:
 
-  $dfIx :: (Ix a, Ix x) => Ix (a,b)
-  {- DFUN [$crange, ...] -}
-  $dfIx da db = Ix ($crange da db) (...other methods...)
-
-  $dfIxPair :: (Ix a, Ix x) => Ix (a,b)
+  $dfIxPair :: (Ix a, Ix b) => Ix (a,b)
   {- DFUN [$crangePair, ...] -}
-  $dfIxPair = Ix ($crangePair da db) (...other methods...)
+  $dfIxPair da db = Ix ($crangePair da db) (...other methods...)
 
   $crange :: (Ix a, Ix b) -> ((a,b),(a,b)) -> [(a,b)]
   {-# SPECIALISE $crange :: ((Int,Int),(Int,Int)) -> [(Int,Int)] #-}
@@ -1067,14 +1063,22 @@ tcInstanceMethods dfun_id clas tyvars dfun_ev_vars inst_tys
     mk_meth_spec_prags :: Id -> [LTcSpecPrag] -> TcSpecPrags
         -- Adapt the SPECIALISE pragmas to work for this method Id
         -- There are two sources:
-        --   * spec_inst_prags: {-# SPECIALISE instance :: <blah> #-}
-        --     These ones have the dfun inside, but [perhaps surprisingly]
-        --     the correct wrapper
         --   * spec_prags_for_me: {-# SPECIALISE op :: <blah> #-}
+        --   * spec_prags_from_inst: derived from {-# SPECIALISE instance :: <blah> #-}
+        --     These ones have the dfun inside, but [perhaps surprisingly]
+        --     the correct wrapper.
     mk_meth_spec_prags meth_id spec_prags_for_me
-      = SpecPrags (spec_prags_for_me ++
-                   [ L loc (SpecPrag meth_id wrap inl)
-                   | L loc (SpecPrag _ wrap inl) <- spec_inst_prags])
+      = SpecPrags (spec_prags_for_me ++ spec_prags_from_inst)
+      where
+        spec_prags_from_inst
+           | isInlinePragma (idInlinePragma meth_id)
+           = []  -- Do not inherit SPECIALISE from the instance if the
+                 -- method is marked INLINE, because then it'll be inlined
+                 -- and the specialisation would do nothing. (Indeed it'll provoke
+                 -- a warning from the desugarer
+           | otherwise 
+           = [ L loc (SpecPrag meth_id wrap inl)
+             | L loc (SpecPrag _ wrap inl) <- spec_inst_prags]
 
     loc    = getSrcSpan dfun_id
     sig_fn = mkSigFun sigs
