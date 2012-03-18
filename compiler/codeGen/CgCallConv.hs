@@ -36,7 +36,7 @@ import CLabel
 
 import Constants
 import CgStackery
-import ClosureInfo( CgRep(..), argMachRep, nonVoidArg, idCgRep,
+import ClosureInfo( CgRep(..), nonVoidArg, idCgRep,
                     cgRepSizeB, cgRepSizeW, isFollowableArg )
 import OldCmmUtils
 import Maybes
@@ -196,7 +196,7 @@ slowCallPattern (NonPtrArg: _)                          = (fsLit "stg_ap_n", 1)
 slowCallPattern (FloatArg: _)                           = (fsLit "stg_ap_f", 1)
 slowCallPattern (DoubleArg: _)                          = (fsLit "stg_ap_d", 1)
 slowCallPattern (LongArg: _)                            = (fsLit "stg_ap_l", 1)
-slowCallPattern (arg@VecArg {}: _)			= (fsLit slowCallName, 1)
+slowCallPattern (arg@VecArg {}: _)                      = (fsLit slowCallName, 1)
   where
     slowCallName :: String
     slowCallName = "stg_ap_x" ++ (show . cgRepSizeB) arg

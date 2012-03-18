@@ -750,8 +750,8 @@ callishOp _ = Nothing
 
 -- Bytearrays outside the heap; hence non-pointers
 doIndexOffAddrOpAs, doIndexByteArrayOpAs
-	:: Maybe MachOp -> CmmType -> CmmType 
-	-> [LocalReg] -> [CmmExpr] -> Code
+        :: Maybe MachOp -> CmmType -> CmmType 
+        -> [LocalReg] -> [CmmExpr] -> Code
 doIndexOffAddrOpAs maybe_post_read_cast rep idx_rep [res] [addr,idx]
    = mkBasicIndexedRead 0 maybe_post_read_cast rep res addr idx_rep idx
 doIndexOffAddrOpAs _ _ _ _ _
@@ -814,7 +814,7 @@ loadArrPtrsSize addr = CmmLoad (cmmOffsetB addr off) bWord
 mkBasicIndexedRead :: ByteOff       -- Initial offset in bytes
                    -> Maybe MachOp  -- Cast
                    -> CmmType       -- Type of element we are accessing
-		   -> LocalReg      -- Destination
+                   -> LocalReg      -- Destination
                    -> CmmExpr       -- Base address
                    -> CmmType       -- Type of elements by which we are indexing
                    -> CmmExpr       -- Index
@@ -823,12 +823,12 @@ mkBasicIndexedRead off Nothing read_rep res base idx_rep idx
    = stmtC (CmmAssign (CmmLocal res) (cmmLoadIndexOffExpr off read_rep base idx_rep idx))
 mkBasicIndexedRead off (Just cast) read_rep res base idx_rep idx
    = stmtC (CmmAssign (CmmLocal res) (CmmMachOp cast [
-				cmmLoadIndexOffExpr off read_rep base idx_rep idx]))
+                cmmLoadIndexOffExpr off read_rep base idx_rep idx]))
 
 mkBasicIndexedWrite :: ByteOff       -- Initial offset in bytes
                     -> Maybe MachOp  -- Cast
                     -> CmmType       -- Type of element we are accessing
-		    -> CmmExpr       -- Destination
+                    -> CmmExpr       -- Destination
                     -> CmmExpr       -- Index
                     -> CmmExpr       -- Value to write
                     -> Code

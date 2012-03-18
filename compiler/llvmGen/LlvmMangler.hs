@@ -94,24 +94,22 @@ writeSection w (hdr, cts) = do
     B.hPutStrLn w hdr
   B.hPutStrLn w cts
 
+#if mingw32_TARGET_OS
 fixMovaps :: Section -> Section
 fixMovaps (hdr, cts) =
-    (hdr, loop idxs cts)
+    (hdr, loop cts)
   where
-    loop :: [Int] -> B.ByteString -> B.ByteString
-    loop [] cts = cts
-                  
-    loop (i : is) cts =
-        loop is (hd `B.append` movups `B.append` B.drop 6 tl)
-      where
-        (hd, tl) = B.splitAt i cts
-
-    idxs :: [Int]
-    idxs = B.findSubstrings movaps cts
+    loop :: B.ByteString -> B.ByteString
+    loop cts =
+        case B.breakSubstring cts movaps of
+          (hd,tl) | B.null tl -> hd
+                  | otherwise -> hd `B.append` movups `B.append`
+                                 loop (B.drop (B.length movaps) tl)
 
     movaps, movups :: B.ByteString
     movaps = B.pack "movaps"
     movups = B.pack "movups"
+#endif
 
 -- | Reorder and convert sections so info tables end up next to the
 -- code. Also does stack fixups.

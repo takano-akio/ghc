@@ -824,6 +824,22 @@ genMachOp env _ op [x] = case op of
     MO_U_Shr        _ -> panicOp
     MO_S_Shr        _ -> panicOp
 
+    MO_V_Insert    {} -> panicOp
+    MO_V_Extract   {} -> panicOp
+
+    MO_VF_Add      {} -> panicOp
+    MO_VF_Sub      {} -> panicOp
+    MO_VF_Mul      {} -> panicOp
+    MO_VF_Quot     {} -> panicOp
+  
+    MO_VN_Add      {} -> panicOp
+    MO_VN_Sub      {} -> panicOp
+    MO_VN_Mul      {} -> panicOp
+    MO_VN_SQuot    {} -> panicOp
+    MO_VN_SRem     {} -> panicOp
+    MO_VN_UQuot    {} -> panicOp
+    MO_VN_URem     {} -> panicOp
+
     where
         negate ty v2 negOp = do
             (env', vx, stmts, top) <- exprToVar env x
@@ -974,6 +990,13 @@ genMachOp_slow env opt op [x, y] = case op of
     MO_SS_Conv _ _ -> panicOp
     MO_UU_Conv _ _ -> panicOp
     MO_FF_Conv _ _ -> panicOp
+
+    MO_V_Insert  {} -> panicOp
+    MO_V_Extract {} -> panicOp
+
+    MO_VF_Neg    {} -> panicOp
+  
+    MO_VN_Neg    {} -> panicOp
 
     where
         binLlvmOp ty binOp = do

@@ -597,6 +597,69 @@ pprMachOp_for_C mop = case mop of
                                 (panic $ "PprC.pprMachOp_for_C: MO_U_MulMayOflo"
                                       ++ " should have been handled earlier!")
 
+        MO_V_Insert {}    -> pprTrace "offending mop:"
+                                (ptext $ sLit "MO_V_Insert")
+                                (panic $ "PprC.pprMachOp_for_C: MO_V_Insert"
+                                      ++ " should have been handled earlier!")
+        MO_V_Extract {}   -> pprTrace "offending mop:"
+                                (ptext $ sLit "MO_V_Extract")
+                                (panic $ "PprC.pprMachOp_for_C: MO_V_Extract"
+                                      ++ " should have been handled earlier!")
+
+        MO_VF_Add {}      -> pprTrace "offending mop:"
+                                (ptext $ sLit "MO_VF_Add")
+                                (panic $ "PprC.pprMachOp_for_C: MO_VF_Add"
+                                      ++ " should have been handled earlier!")
+        MO_VF_Sub {}      -> pprTrace "offending mop:"
+                                (ptext $ sLit "MO_VF_Sub")
+                                (panic $ "PprC.pprMachOp_for_C: MO_VF_Sub"
+                                      ++ " should have been handled earlier!")
+        MO_VF_Neg {}      -> pprTrace "offending mop:"
+                                (ptext $ sLit "MO_VF_Neg")
+                                (panic $ "PprC.pprMachOp_for_C: MO_VF_Neg"
+                                      ++ " should have been handled earlier!")
+        MO_VF_Mul {}      -> pprTrace "offending mop:"
+                                (ptext $ sLit "MO_VF_Mul")
+                                (panic $ "PprC.pprMachOp_for_C: MO_VF_Mul"
+                                      ++ " should have been handled earlier!")
+        MO_VF_Quot {}     -> pprTrace "offending mop:"
+                                (ptext $ sLit "MO_VF_Quot")
+                                (panic $ "PprC.pprMachOp_for_C: MO_VF_Quot"
+                                      ++ " should have been handled earlier!")
+
+        MO_VN_Add {}      -> pprTrace "offending mop:"
+                                (ptext $ sLit "MO_VN_Add")
+                                (panic $ "PprC.pprMachOp_for_C: MO_VN_Add"
+                                      ++ " should have been handled earlier!")
+        MO_VN_Sub {}      -> pprTrace "offending mop:"
+                                (ptext $ sLit "MO_VN_Sub")
+                                (panic $ "PprC.pprMachOp_for_C: MO_VN_Sub"
+                                      ++ " should have been handled earlier!")
+        MO_VN_Neg {}      -> pprTrace "offending mop:"
+                                (ptext $ sLit "MO_VN_Neg")
+                                (panic $ "PprC.pprMachOp_for_C: MO_VN_Neg"
+                                      ++ " should have been handled earlier!")
+        MO_VN_Mul {}      -> pprTrace "offending mop:"
+                                (ptext $ sLit "MO_VN_Mul")
+                                (panic $ "PprC.pprMachOp_for_C: MO_VN_Mul"
+                                      ++ " should have been handled earlier!")
+        MO_VN_SQuot {}    -> pprTrace "offending mop:"
+                                (ptext $ sLit "MO_VN_SQuot")
+                                (panic $ "PprC.pprMachOp_for_C: MO_VN_SQuot"
+                                      ++ " should have been handled earlier!")
+        MO_VN_SRem {}     -> pprTrace "offending mop:"
+                                (ptext $ sLit "MO_VN_SRem")
+                                (panic $ "PprC.pprMachOp_for_C: MO_VN_SRem"
+                                      ++ " should have been handled earlier!")
+        MO_VN_UQuot {}    -> pprTrace "offending mop:"
+                                (ptext $ sLit "MO_VN_UQuot")
+                                (panic $ "PprC.pprMachOp_for_C: MO_VN_UQuot"
+                                      ++ " should have been handled earlier!")
+        MO_VN_URem {}     -> pprTrace "offending mop:"
+                                (ptext $ sLit "MO_VN_URem")
+                                (panic $ "PprC.pprMachOp_for_C: MO_VN_URem"
+                                      ++ " should have been handled earlier!")
+
 signedOp :: MachOp -> Bool      -- Argument type(s) are signed ints
 signedOp (MO_S_Quot _)    = True
 signedOp (MO_S_Rem  _)    = True
