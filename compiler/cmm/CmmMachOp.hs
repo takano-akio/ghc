@@ -107,14 +107,14 @@ data MachOp
   | MO_V_Insert  Length Width   -- Insert scalar into vector
   | MO_V_Extract Length Width   -- Extract scalar from vector
 
-  -- Float vector operations
+  -- Floating vector operations
   | MO_VF_Add  Length Width  
   | MO_VF_Sub  Length Width  
   | MO_VF_Neg  Length Width             -- unary -
   | MO_VF_Mul  Length Width
   | MO_VF_Quot Length Width
   
-  -- Float Int32 operations
+  -- Integer vector operations
   | MO_VN_Add   Length Width  
   | MO_VN_Sub   Length Width  
   | MO_VN_Neg   Length Width             -- unary -
