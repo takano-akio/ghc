@@ -37,10 +37,11 @@ module TcType (
   isSigTyVar, isOverlappableTyVar,  isTyConableTyVar,
   isAmbiguousTyVar, metaTvRef, 
   isFlexi, isIndirect, isRuntimeUnkSkol,
+  isTypeVar, isKindVar,
 
   --------------------------------
   -- Builders
-  mkPhiTy, mkSigmaTy, 
+  mkPhiTy, mkSigmaTy, mkTcEqPred,
 
   --------------------------------
   -- Splitters  
@@ -88,7 +89,7 @@ module TcType (
   tidyType,      tidyTypes,
   tidyOpenType,  tidyOpenTypes,
   tidyOpenKind,
-  tidyTyVarBndr, tidyFreeTyVars,
+  tidyTyVarBndr, tidyTyVarBndrs, tidyFreeTyVars,
   tidyOpenTyVar, tidyOpenTyVars,
   tidyTyVarOcc,
   tidyTopType,
@@ -118,7 +119,7 @@ module TcType (
   unliftedTypeKind, liftedTypeKind, argTypeKind,
   openTypeKind, constraintKind, mkArrowKind, mkArrowKinds, 
   isLiftedTypeKind, isUnliftedTypeKind, isSubOpenTypeKind, 
-  isSubArgTypeKind, isSubKind, splitKindFunTys, defaultKind,
+  isSubArgTypeKind, tcIsSubKind, splitKindFunTys, defaultKind,
   mkMetaKindVar,
 
   --------------------------------
@@ -133,7 +134,7 @@ module TcType (
   mkClassPred, mkIPPred,
   isDictLikeTy,
   tcSplitDFunTy, tcSplitDFunHead, 
-  mkEqPred,
+  mkEqPred, 
 
   -- Type substitutions
   TvSubst(..), 	-- Representation visible to a few friends
@@ -173,7 +174,9 @@ import TyCon
 
 -- others:
 import DynFlags
-import Name hiding (varName)
+import Name -- hiding (varName)
+            -- We use this to make dictionaries for type literals.
+            -- Perhaps there's a better way to do this?
 import NameSet
 import VarEnv
 import PrelNames
@@ -388,11 +391,7 @@ mkKindName unique = mkSystemName unique kind_var_occ
 
 mkMetaKindVar :: Unique -> IORef MetaDetails -> MetaKindVar
 mkMetaKindVar u r
-  = mkTcTyVar (mkKindName u)
-              tySuperKind  -- not sure this is right,
-                            -- do we need kind vars for
-                            -- coercions?
-              (MetaTv TauTv r)
+  = mkTcTyVar (mkKindName u) superKind (MetaTv TauTv r)
 
 kind_var_occ :: OccName	-- Just one for all MetaKindVars
 			-- They may be jiggled by tidying
@@ -451,6 +450,9 @@ Tidying is here becuase it has a special case for FlatSkol
 -- an interface file.
 -- 
 -- It doesn't change the uniques at all, just the print names.
+tidyTyVarBndrs :: TidyEnv -> [TyVar] -> (TidyEnv, [TyVar])
+tidyTyVarBndrs env tvs = mapAccumL tidyTyVarBndr env tvs
+
 tidyTyVarBndr :: TidyEnv -> TyVar -> (TidyEnv, TyVar)
 tidyTyVarBndr tidy_env@(occ_env, subst) tyvar
   = case tidyOccName occ_env occ1 of
@@ -529,6 +531,7 @@ tidyTypes env tys = map (tidyType env) tys
 
 ---------------
 tidyType :: TidyEnv -> Type -> Type
+tidyType _   (LitTy n)            = LitTy n
 tidyType env (TyVarTy tv)	  = tidyTyVarOcc env tv
 tidyType env (TyConApp tycon tys) = let args = tidyTypes env tys
  		                    in args `seqList` TyConApp tycon args
@@ -609,13 +612,14 @@ tidyCos env = map (tidyCo env)
 tcTyFamInsts :: Type -> [(TyCon, [Type])]
 tcTyFamInsts ty 
   | Just exp_ty <- tcView ty    = tcTyFamInsts exp_ty
-tcTyFamInsts (TyVarTy _)          = []
+tcTyFamInsts (TyVarTy _)        = []
 tcTyFamInsts (TyConApp tc tys) 
-  | isSynFamilyTyCon tc           = [(tc, tys)]
+  | isSynFamilyTyCon tc         = [(tc, tys)]
   | otherwise                   = concat (map tcTyFamInsts tys)
-tcTyFamInsts (FunTy ty1 ty2)      = tcTyFamInsts ty1 ++ tcTyFamInsts ty2
-tcTyFamInsts (AppTy ty1 ty2)      = tcTyFamInsts ty1 ++ tcTyFamInsts ty2
-tcTyFamInsts (ForAllTy _ ty)      = tcTyFamInsts ty
+tcTyFamInsts (LitTy {})         = []
+tcTyFamInsts (FunTy ty1 ty2)    = tcTyFamInsts ty1 ++ tcTyFamInsts ty2
+tcTyFamInsts (AppTy ty1 ty2)    = tcTyFamInsts ty1 ++ tcTyFamInsts ty2
+tcTyFamInsts (ForAllTy _ ty)    = tcTyFamInsts ty
 \end{code}
 
 %************************************************************************
@@ -662,6 +666,7 @@ exactTyVarsOfType ty
     go ty | Just ty' <- tcView ty = go ty'  -- This is the key line
     go (TyVarTy tv)         = unitVarSet tv
     go (TyConApp _ tys)     = exactTyVarsOfTypes tys
+    go (LitTy {})           = emptyVarSet
     go (FunTy arg res)      = go arg `unionVarSet` go res
     go (AppTy fun arg)      = go fun `unionVarSet` go arg
     go (ForAllTy tyvar ty)  = delVarSet (go ty) tyvar
@@ -772,6 +777,17 @@ mkSigmaTy tyvars theta tau = mkForAllTys tyvars (mkPhiTy theta tau)
 
 mkPhiTy :: [PredType] -> Type -> Type
 mkPhiTy theta ty = foldr mkFunTy ty theta
+
+mkTcEqPred :: TcType -> TcType -> Type
+-- During type checking we build equalities between 
+-- type variables with OpenKind or ArgKind.  Ultimately
+-- they will all settle, but we want the equality predicate
+-- itself to have kind '*'.  I think.  
+--
+-- But this is horribly delicate: what about type variables
+-- that turn out to be bound to Int#?
+mkTcEqPred ty1 ty2
+  = mkNakedEqPred (defaultKind (typeKind ty1)) ty1 ty2
 \end{code}
 
 @isTauTy@ tests for nested for-alls.  It should not be called on a boxy type.
@@ -797,9 +813,14 @@ getDFunTyKey :: Type -> OccName -- Get some string from a type, to be used to
 getDFunTyKey ty | Just ty' <- tcView ty = getDFunTyKey ty'
 getDFunTyKey (TyVarTy tv)    = getOccName tv
 getDFunTyKey (TyConApp tc _) = getOccName tc
+getDFunTyKey (LitTy x)       = getDFunTyLitKey x
 getDFunTyKey (AppTy fun _)   = getDFunTyKey fun
 getDFunTyKey (FunTy _ _)     = getOccName funTyCon
 getDFunTyKey (ForAllTy _ t)  = getDFunTyKey t
+
+getDFunTyLitKey :: TyLit -> OccName
+getDFunTyLitKey (NumTyLit n) = mkOccName Name.varName (show n)
+getDFunTyLitKey (StrTyLit n) = mkOccName Name.varName (show n)  -- hm
 \end{code}
 
 
@@ -1155,7 +1176,7 @@ isOverloadedTy _               = False
 
 \begin{code}
 isFloatTy, isDoubleTy, isIntegerTy, isIntTy, isWordTy, isBoolTy,
-    isUnitTy, isCharTy :: Type -> Bool
+    isUnitTy, isCharTy, isAnyTy :: Type -> Bool
 isFloatTy      = is_tc floatTyConKey
 isDoubleTy     = is_tc doubleTyConKey
 isIntegerTy    = is_tc integerTyConKey
@@ -1164,6 +1185,7 @@ isWordTy       = is_tc wordTyConKey
 isBoolTy       = is_tc boolTyConKey
 isUnitTy       = is_tc unitTyConKey
 isCharTy       = is_tc charTyConKey
+isAnyTy        = is_tc anyTyConKey
 
 isStringTy :: Type -> Bool
 isStringTy ty
@@ -1207,6 +1229,7 @@ tcTyVarsOfType :: Type -> TcTyVarSet
 tcTyVarsOfType (TyVarTy tv)	    = if isTcTyVar tv then unitVarSet tv
 						      else emptyVarSet
 tcTyVarsOfType (TyConApp _ tys)     = tcTyVarsOfTypes tys
+tcTyVarsOfType (LitTy {})           = emptyVarSet
 tcTyVarsOfType (FunTy arg res)	    = tcTyVarsOfType arg `unionVarSet` tcTyVarsOfType res
 tcTyVarsOfType (AppTy fun arg)	    = tcTyVarsOfType fun `unionVarSet` tcTyVarsOfType arg
 tcTyVarsOfType (ForAllTy tyvar ty)  = tcTyVarsOfType ty `delVarSet` tyvar
@@ -1231,6 +1254,7 @@ orphNamesOfType ty | Just ty' <- tcView ty = orphNamesOfType ty'
 orphNamesOfType (TyVarTy _)		   = emptyNameSet
 orphNamesOfType (TyConApp tycon tys)       = orphNamesOfTyCon tycon
                                              `unionNameSets` orphNamesOfTypes tys
+orphNamesOfType (LitTy {})          = emptyNameSet
 orphNamesOfType (FunTy arg res)	    = orphNamesOfType arg `unionNameSets` orphNamesOfType res
 orphNamesOfType (AppTy fun arg)	    = orphNamesOfType fun `unionNameSets` orphNamesOfType arg
 orphNamesOfType (ForAllTy _ ty)	    = orphNamesOfType ty
@@ -1331,9 +1355,11 @@ isFFILabelTy = checkRepTyConKey [ptrTyConKey, funPtrTyConKey]
 
 isFFIPrimArgumentTy :: DynFlags -> Type -> Bool
 -- Checks for valid argument type for a 'foreign import prim'
--- Currently they must all be simple unlifted types.
+-- Currently they must all be simple unlifted types, or the well-known type
+-- Any, which can be used to pass the address to a Haskell object on the heap to
+-- the foreign function.
 isFFIPrimArgumentTy dflags ty
-   = checkRepTyCon (legalFIPrimArgTyCon dflags) ty
+   = isAnyTy ty || checkRepTyCon (legalFIPrimArgTyCon dflags) ty
 
 isFFIPrimResultTy :: DynFlags -> Type -> Bool
 -- Checks for valid result type for a 'foreign import prim'

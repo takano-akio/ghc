@@ -16,7 +16,8 @@ module DynFlags (
         DynFlag(..),
         WarningFlag(..),
         ExtensionFlag(..),
-        LogAction,
+        Language(..),
+        LogAction, FlushOut(..), FlushErr(..),
         ProfAuto(..),
         glasgowExtsFlags,
         dopt,
@@ -28,10 +29,12 @@ module DynFlags (
         xopt,
         xopt_set,
         xopt_unset,
+        lang_set,
         DynFlags(..),
         HasDynFlags(..), ContainsDynFlags(..),
         RtsOptsEnabled(..),
         HscTarget(..), isObjectTarget, defaultObjectTarget,
+        targetRetainsAllBindings,
         GhcMode(..), isOneShot,
         GhcLink(..), isNoLink,
         PackageFlag(..),
@@ -61,6 +64,8 @@ module DynFlags (
         defaultDynFlags,                -- Settings -> DynFlags
         initDynFlags,                   -- DynFlags -> IO DynFlags
         defaultLogAction,
+        defaultFlushOut,
+        defaultFlushErr,
 
         getOpts,                        -- DynFlags -> (DynFlags -> [a]) -> [a]
         getVerbFlags,
@@ -128,7 +133,7 @@ import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import System.FilePath
-import System.IO        ( stderr, hPutChar )
+import System.IO
 
 import Data.IntSet (IntSet)
 import qualified Data.IntSet as IntSet
@@ -224,7 +229,7 @@ data DynFlag
    | Opt_DoStgLinting
    | Opt_DoCmmLinting
    | Opt_DoAsmLinting
-   | Opt_NoLlvmMangler
+   | Opt_NoLlvmMangler                 -- hidden flag
 
    | Opt_WarnIsError                    -- -Werror; makes warnings fatal
 
@@ -247,11 +252,12 @@ data DynFlag
    | Opt_DictsCheap
    | Opt_EnableRewriteRules             -- Apply rewrite rules during simplification
    | Opt_Vectorise
+   | Opt_AvoidVect
    | Opt_RegsGraph                      -- do graph coloring register allocation
    | Opt_RegsIterative                  -- do iterative coalescing graph coloring register allocation
    | Opt_PedanticBottoms                -- Be picky about how we treat bottom
-   | Opt_LlvmTBAA                       -- Use LLVM TBAA infastructure for improving AA
-   | Opt_RegLiveness                    -- Use the STG Reg liveness information
+   | Opt_LlvmTBAA                       -- Use LLVM TBAA infastructure for improving AA (hidden flag)
+   | Opt_RegLiveness                    -- Use the STG Reg liveness information (hidden flag)
 
    -- Interface files
    | Opt_IgnoreInterfacePragmas
@@ -444,6 +450,7 @@ data ExtensionFlag
    | Opt_RankNTypes
    | Opt_ImpredicativeTypes
    | Opt_TypeOperators
+   | Opt_ExplicitNamespaces
    | Opt_PackageImports
    | Opt_ExplicitForAll
    | Opt_AlternativeLayoutRule
@@ -585,6 +592,8 @@ data DynFlags = DynFlags {
 
   -- | MsgDoc output action: use "ErrUtils" instead of this if you can
   log_action            :: LogAction,
+  flushOut              :: FlushOut,
+  flushErr              :: FlushErr,
 
   haddockOptions        :: Maybe String,
 
@@ -728,7 +737,7 @@ wayNames = map wayName . ways
 --    from an imported module.  This will fail if no code has been generated
 --    for this module.  You can use 'GHC.needsTemplateHaskell' to detect
 --    whether this might be the case and choose to either switch to a
---    different target or avoid typechecking such modules.  (The latter may
+--    different target or avoid typechecking such modules.  (The latter may be
 --    preferable for security reasons.)
 --
 data HscTarget
@@ -752,6 +761,17 @@ isObjectTarget HscC     = True
 isObjectTarget HscAsm   = True
 isObjectTarget HscLlvm  = True
 isObjectTarget _        = False
+
+-- | Does this target retain *all* top-level bindings for a module,
+-- rather than just the exported bindings, in the TypeEnv and compiled
+-- code (if any)?  In interpreted mode we do this, so that GHCi can
+-- call functions inside a module.  In HscNothing mode we also do it,
+-- so that Haddock can get access to the GlobalRdrEnv for a module
+-- after typechecking it.
+targetRetainsAllBindings :: HscTarget -> Bool
+targetRetainsAllBindings HscInterpreted = True
+targetRetainsAllBindings HscNothing     = True
+targetRetainsAllBindings _              = False
 
 -- | The 'GhcMode' tells us whether we're doing multi-module
 -- compilation (controlled via the "GHC" API) or one-shot
@@ -930,6 +950,8 @@ defaultDynFlags mySettings =
         extensions = [],
         extensionFlags = flattenExtensionFlags Nothing [],
         log_action = defaultLogAction,
+        flushOut = defaultFlushOut,
+        flushErr = defaultFlushErr,
         profAuto = NoProfAuto,
         llvmVersion = panic "defaultDynFlags: No llvmVersion"
       }
@@ -947,6 +969,16 @@ defaultLogAction severity srcSpan style msg
                    -- careful (#2302): printErrs prints in UTF-8, whereas
                    -- converting to string first and using hPutStr would
                    -- just emit the low 8 bits of each unicode char.
+
+newtype FlushOut = FlushOut (IO ())
+
+defaultFlushOut :: FlushOut
+defaultFlushOut = FlushOut $ hFlush stdout
+
+newtype FlushErr = FlushErr (IO ())
+
+defaultFlushErr :: FlushErr
+defaultFlushErr = FlushErr $ hFlush stderr
 
 {-
 Note [Verbosity levels]
@@ -1050,15 +1082,16 @@ xopt_unset dfs f
       in dfs { extensions = onoffs,
                extensionFlags = flattenExtensionFlags (language dfs) onoffs }
 
+lang_set :: DynFlags -> Maybe Language -> DynFlags
+lang_set dflags lang =
+   dflags {
+            language = lang,
+            extensionFlags = flattenExtensionFlags lang (extensions dflags)
+          }
+
 -- | Set the Haskell language standard to use
 setLanguage :: Language -> DynP ()
-setLanguage l = upd f
-    where f dfs = let mLang = Just l
-                      oneoffs = extensions dfs
-                  in dfs {
-                         language = mLang,
-                         extensionFlags = flattenExtensionFlags mLang oneoffs
-                     }
+setLanguage l = upd (`lang_set` Just l)
 
 -- | Some modules have dependencies on others through the DynFlags rather than textual imports
 dynFlagDependencies :: DynFlags -> [ModuleName]
@@ -1608,7 +1641,7 @@ dynamic_flags = [
   , Flag "dshow-passes"            (NoArg (do forceRecompile
                                               setVerbosity $ Just 2))
   , Flag "dfaststring-stats"       (NoArg (setDynFlag Opt_D_faststring_stats))
-  , Flag "dno-llvm-mangler"        (NoArg (setDynFlag Opt_NoLlvmMangler))
+  , Flag "dno-llvm-mangler"        (NoArg (setDynFlag Opt_NoLlvmMangler)) -- hidden flag
 
         ------ Machine dependant (-m<blah>) stuff ---------------------------
 
@@ -1834,10 +1867,11 @@ fFlags = [
   ( "run-cpsz",                         Opt_RunCPSZ, nop ),
   ( "new-codegen",                      Opt_TryNewCodeGen, nop ),
   ( "vectorise",                        Opt_Vectorise, nop ),
+  ( "avoid-vect",                       Opt_AvoidVect, nop ),
   ( "regs-graph",                       Opt_RegsGraph, nop ),
   ( "regs-iterative",                   Opt_RegsIterative, nop ),
-  ( "llvm-tbaa",                        Opt_LlvmTBAA, nop),
-  ( "reg-liveness",                     Opt_RegLiveness, nop),
+  ( "llvm-tbaa",                        Opt_LlvmTBAA, nop), -- hidden flag
+  ( "regs-liveness",                    Opt_RegLiveness, nop), -- hidden flag
   ( "gen-manifest",                     Opt_GenManifest, nop ),
   ( "embed-manifest",                   Opt_EmbedManifest, nop ),
   ( "ext-core",                         Opt_EmitExternalCore, nop ),
@@ -1942,6 +1976,7 @@ xFlags = [
   ( "RankNTypes",                       Opt_RankNTypes, nop ),
   ( "ImpredicativeTypes",               Opt_ImpredicativeTypes, nop),
   ( "TypeOperators",                    Opt_TypeOperators, nop ),
+  ( "ExplicitNamespaces",               Opt_ExplicitNamespaces, nop ),
   ( "RecursiveDo",                      Opt_RecursiveDo,     -- Enables 'mdo'
     deprecatedForExtension "DoRec"),
   ( "DoRec",                            Opt_DoRec, nop ),    -- Enables 'rec' keyword
@@ -2053,7 +2088,11 @@ impliedFlags
     , (Opt_TypeFamilies,     turnOn, Opt_MonoLocalBinds)
 
     , (Opt_TypeFamilies,     turnOn, Opt_KindSignatures)  -- Type families use kind signatures
-                                                          -- all over the place
+
+    -- We turn this on so that we can export associated type
+    -- type synonyms in subordinates (e.g. MyClass(type AssocType))
+    , (Opt_TypeFamilies,     turnOn, Opt_ExplicitNamespaces)
+    , (Opt_TypeOperators, turnOn, Opt_ExplicitNamespaces)
 
     , (Opt_ImpredicativeTypes,  turnOn, Opt_RankNTypes)
 
@@ -2184,6 +2223,7 @@ glasgowExtsFlags = [
            , Opt_LiberalTypeSynonyms
            , Opt_RankNTypes
            , Opt_TypeOperators
+           , Opt_ExplicitNamespaces
            , Opt_DoRec
            , Opt_ParallelListComp
            , Opt_EmptyDataDecls

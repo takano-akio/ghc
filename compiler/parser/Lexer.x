@@ -56,6 +56,8 @@ module Lexer (
    getLexState, popLexState, pushLexState,
    extension, bangPatEnabled, datatypeContextsEnabled,
    traditionalRecordSyntaxEnabled,
+   typeLiteralsEnabled,
+   explicitNamespacesEnabled,
    addWarning,
    lexTokenStream
   ) where
@@ -487,6 +489,7 @@ data Token
   | ITvect_prag
   | ITvect_scalar_prag
   | ITnovect_prag
+  | ITctype
 
   | ITdotdot                    -- reserved symbols
   | ITcolon
@@ -1805,6 +1808,11 @@ safeHaskellBit :: Int
 safeHaskellBit = 26
 traditionalRecordSyntaxBit :: Int
 traditionalRecordSyntaxBit = 27
+typeLiteralsBit :: Int
+typeLiteralsBit = 28
+explicitNamespacesBit :: Int
+explicitNamespacesBit = 29
+
 
 always :: Int -> Bool
 always           _     = True
@@ -1848,6 +1856,11 @@ nondecreasingIndentation :: Int -> Bool
 nondecreasingIndentation flags = testBit flags nondecreasingIndentationBit
 traditionalRecordSyntaxEnabled :: Int -> Bool
 traditionalRecordSyntaxEnabled flags = testBit flags traditionalRecordSyntaxBit
+typeLiteralsEnabled :: Int -> Bool
+typeLiteralsEnabled flags = testBit flags typeLiteralsBit
+
+explicitNamespacesEnabled :: Int -> Bool
+explicitNamespacesEnabled flags = testBit flags explicitNamespacesBit
 
 -- PState for parsing options pragmas
 --
@@ -1907,6 +1920,8 @@ mkPState flags buf loc =
                .|. nondecreasingIndentationBit `setBitIf` xopt Opt_NondecreasingIndentation flags
                .|. safeHaskellBit              `setBitIf` safeImportsOn                     flags
                .|. traditionalRecordSyntaxBit  `setBitIf` xopt Opt_TraditionalRecordSyntax  flags
+               .|. typeLiteralsBit             `setBitIf` xopt Opt_DataKinds flags
+               .|. explicitNamespacesBit       `setBitIf` xopt Opt_ExplicitNamespaces flags
       --
       setBitIf :: Int -> Bool -> Int
       b `setBitIf` cond | cond      = bit b
@@ -2287,7 +2302,8 @@ oneWordPrags = Map.fromList([("rules", rulePrag),
                            ("nounpack", token ITnounpack_prag),
                            ("ann", token ITann_prag),
                            ("vectorize", token ITvect_prag),
-                           ("novectorize", token ITnovect_prag)])
+                           ("novectorize", token ITnovect_prag),
+                           ("ctype", token ITctype)])
 
 twoWordPrags = Map.fromList([("inline conlike", token (ITinline_prag Inline ConLike)),
                              ("notinline conlike", token (ITinline_prag NoInline ConLike)),

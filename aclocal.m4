@@ -211,6 +211,9 @@ AC_DEFUN([FPTOOLS_SET_HASKELL_PLATFORM_VARS],
         freebsd)
             test -z "[$]2" || eval "[$]2=OSFreeBSD"
             ;;
+        dragonfly)
+            test -z "[$]2" || eval "[$]2=OSDragonFly"
+            ;;
         kfreebsdgnu)
             test -z "[$]2" || eval "[$]2=OSKFreeBSD"
             ;;
@@ -220,7 +223,10 @@ AC_DEFUN([FPTOOLS_SET_HASKELL_PLATFORM_VARS],
         netbsd)
             test -z "[$]2" || eval "[$]2=OSNetBSD"
             ;;
-        dragonfly|osf1|osf3|hpux|linuxaout|freebsd2|cygwin32|gnu|nextstep2|nextstep3|sunos4|ultrix|irix|aix|haiku)
+        haiku)
+            test -z "[$]2" || eval "[$]2=OSHaiku"
+            ;;
+        dragonfly|osf1|osf3|hpux|linuxaout|freebsd2|cygwin32|gnu|nextstep2|nextstep3|sunos4|ultrix|irix|aix)
             test -z "[$]2" || eval "[$]2=OSUnknown"
             ;;
         *)
@@ -293,7 +299,7 @@ AC_DEFUN([FPTOOLS_SET_HASKELL_PLATFORM_VARS],
 
 # GET_ARM_ISA
 # ----------------------------------
-# Get info about the ISA on the Arm arch
+# Get info about the ISA on the ARM arch
 AC_DEFUN([GET_ARM_ISA],
 [
     AC_COMPILE_IFELSE([
@@ -357,12 +363,18 @@ AC_DEFUN([FP_SETTINGS],
 [
     if test "$windows" = YES
     then
-        SettingsCCompilerCommand='$topdir/../mingw/bin/gcc.exe'
+        if test "$HostArch" = "x86_64"
+        then
+            mingw_bin_prefix=x86_64-w64-mingw32-
+        else
+            mingw_bin_prefix=
+        fi
+        SettingsCCompilerCommand="\$topdir/../mingw/bin/${mingw_bin_prefix}gcc.exe"
         SettingsCCompilerFlags="$CONF_CC_OPTS_STAGE2 $CONF_GCC_LINKER_OPTS_STAGE2"
-        SettingsArCommand='$topdir/../mingw/bin/ar.exe'
+        SettingsArCommand="\$topdir/../mingw/bin/${mingw_bin_prefix}ar.exe"
         SettingsPerlCommand='$topdir/../perl/perl.exe'
-        SettingsDllWrapCommand='$topdir/../mingw/bin/dllwrap.exe'
-        SettingsWindresCommand='$topdir/../mingw/bin/windres.exe'
+        SettingsDllWrapCommand="\$topdir/../mingw/bin/${mingw_bin_prefix}dllwrap.exe"
+        SettingsWindresCommand="\$topdir/../mingw/bin/${mingw_bin_prefix}windres.exe"
         SettingsTouchCommand='$topdir/touchy.exe'
     else
         SettingsCCompilerCommand="$WhatGccIsCalled"
@@ -483,7 +495,7 @@ AC_DEFUN([FP_VISIBILITY_HIDDEN],
 
 # FPTOOLS_FLOAT_WORD_ORDER_BIGENDIAN
 # ----------------------------------
-# Little endian Arm on Linux with some ABIs has big endian word order
+# Little endian ARM on Linux with some ABIs has big endian word order
 # in doubles. Define FLOAT_WORDS_BIGENDIAN if this is the case.
 AC_DEFUN([FPTOOLS_FLOAT_WORD_ORDER_BIGENDIAN],
   [AC_CACHE_CHECK([whether float word order is big endian], [fptools_cv_float_word_order_bigendian],
@@ -680,7 +692,8 @@ case $HostPlatform in
   esac ;;
 alpha-dec-osf*) fptools_cv_leading_underscore=no;;
 *cygwin32) fptools_cv_leading_underscore=yes;;
-*mingw32) fptools_cv_leading_underscore=yes;;
+i386-unknown-mingw32) fptools_cv_leading_underscore=yes;;
+x86_64-unknown-mingw32) fptools_cv_leading_underscore=no;;
 
     # HACK: Apple doesn't seem to provide nlist in the 64-bit-libraries
 x86_64-apple-darwin*) fptools_cv_leading_underscore=yes;;
@@ -770,9 +783,9 @@ dnl
 AC_DEFUN([FPTOOLS_HAPPY],
 [AC_PATH_PROG(HappyCmd,happy,)
 # Happy is passed to Cabal, so we need a native path
-if test "x$HostPlatform"  = "xi386-unknown-mingw32" && \
-   test "${OSTYPE}"      != "msys"                  && \
-   test "${HappyCmd}"    != ""
+if test "$HostOS"      = "mingw32" && \
+   test "${OSTYPE}"   != "msys"    && \
+   test "${HappyCmd}" != ""
 then
     # Canonicalise to <drive>:/path/to/gcc
     HappyCmd=`cygpath -m "${HappyCmd}"`
@@ -806,9 +819,9 @@ AC_DEFUN([FPTOOLS_ALEX],
 [
 AC_PATH_PROG(AlexCmd,alex,)
 # Alex is passed to Cabal, so we need a native path
-if test "x$HostPlatform"  = "xi386-unknown-mingw32" && \
-   test "${OSTYPE}"      != "msys"                  && \
-   test "${AlexCmd}"     != ""
+if test "$HostOS"     = "mingw32" && \
+   test "${OSTYPE}"  != "msys"    && \
+   test "${AlexCmd}" != ""
 then
     # Canonicalise to <drive>:/path/to/gcc
     AlexCmd=`cygpath -m "${AlexCmd}"`
@@ -1932,7 +1945,9 @@ case "$1" in
   freebsd|netbsd|openbsd|dragonfly|osf1|osf3|hpux|linuxaout|kfreebsdgnu|freebsd2|solaris2|cygwin32|mingw32|darwin|gnu|nextstep2|nextstep3|sunos4|ultrix|irix|aix|haiku)
     $2="$1"
     ;;
-  freebsd8) # like i686-gentoo-freebsd8
+  freebsd*) # like i686-gentoo-freebsd7
+            #      i686-gentoo-freebsd8
+            #      i686-gentoo-freebsd8.2
     $2="freebsd"
     ;;
   *)

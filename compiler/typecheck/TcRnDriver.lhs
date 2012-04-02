@@ -1091,7 +1091,7 @@ get two defns for 'main' in the interface file!
 setInteractiveContext :: HscEnv -> InteractiveContext -> TcRn a -> TcRn a
 setInteractiveContext hsc_env icxt thing_inside
   = let -- Initialise the tcg_inst_env with instances from all home modules.
-        -- This mimics the more selective call to hptInstances in tcRnModule.
+        -- This mimics the more selective call to hptInstances in tcRnImports
         (home_insts, home_fam_insts) = hptInstances hsc_env (\_ -> True)
         (ic_insts, ic_finsts) = ic_instances icxt
 
@@ -1143,9 +1143,11 @@ setInteractiveContext hsc_env icxt thing_inside
                                                (map getOccName visible_tmp_ids)
                                  -- Note [delete shadowed tcg_rdr_env entries]
         , tcg_type_env     = type_env
+        , tcg_insts        = ic_insts
         , tcg_inst_env     = extendInstEnvList
                               (extendInstEnvList (tcg_inst_env env) ic_insts)
                               home_insts
+        , tcg_fam_insts    = ic_finsts
         , tcg_fam_inst_env = extendFamInstEnvList
                               (extendFamInstEnvList (tcg_fam_inst_env env)
                                                     ic_finsts)
@@ -1306,7 +1308,13 @@ tcUserStmt (L loc (ExprStmt expr _ _ _))
         --   A. [it <- e; print it]     but not if it::()
         --   B. [it <- e]
         --   C. [let it = e; print it]
-        ; runPlans [    -- Plan A
+        --
+        -- Ensure that type errors don't get deferred when type checking the
+        -- naked expression. Deferring type errors here is unhelpful because the
+        -- expression gets evaluated right away anyway. It also would potentially
+        -- emit two redundant type-error warnings, one from each plan.
+        ; unsetDOptM Opt_DeferTypeErrors $ runPlans [
+                    -- Plan A
                     do { stuff@([it_id], _) <- tcGhciStmts [bind_stmt, print_it]
                        ; it_ty <- zonkTcType (idType it_id)
                        ; when (isUnitTy it_ty) failM
@@ -1456,7 +1464,7 @@ tcRnType hsc_env ictxt normalise rdr_type
   = initTcPrintErrors hsc_env iNTERACTIVE $
     setInteractiveContext hsc_env ictxt $ do {
 
-    rn_type <- rnLHsType GHCiCtx rdr_type ;
+    (rn_type, _fvs) <- rnLHsType GHCiCtx rdr_type ;
     failIfErrsM ;
 
         -- Now kind-check the type

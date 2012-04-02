@@ -981,6 +981,12 @@
             <entry><option>-XNoTypeOperators</option></entry>
           </row>
           <row>
+            <entry><option>-XExplicitNamespaces</option></entry>
+            <entry>Enable using the keyword <literal>type</literal> to specify the namespace of entries in imports and exports.</entry>
+            <entry>dynamic</entry>
+            <entry><option>-XNoExplicitNamespaces</option></entry>
+          </row>
+          <row>
             <entry><option>-XDoRec</option></entry>
             <entry>Enable <link linkend="recursive-do-notation">recursive do notation</link>.</entry>
             <entry>dynamic</entry>
@@ -1301,11 +1307,11 @@
           </row>
 
           <row>
-            <entry><option>-fwarn-orphans</option></entry>
+            <entry><option>-fwarn-orphans, -fwarn-auto-orphans</option></entry>
             <entry>warn when the module contains <link linkend="orphan-modules">orphan instance declarations
                 or rewrite rules</link></entry>
             <entry>dynamic</entry>
-            <entry><option>-fno-warn-orphans</option></entry>
+            <entry><option>-fno-warn-orphans, -fno-warn-auto-orphans</option></entry>
           </row>
 
           <row>
@@ -1499,6 +1505,20 @@
               Implied by <option>-O</option>. </entry>
             <entry>dynamic</entry>
             <entry><option>-fno-enable-rewrite-rules</option></entry>
+          </row>
+
+          <row>
+            <entry><option>-fvectorise</option></entry>
+            <entry>Enable vectorisation of nested data parallelism</entry>
+            <entry>dynamic</entry>
+            <entry><option>-fno-vectorise</option></entry>
+          </row>
+
+          <row>
+            <entry><option>-favoid-vect</option></entry>
+            <entry>Enable vectorisation avoidance (EXPERIMENTAL)</entry>
+            <entry>dynamic</entry>
+            <entry><option>-fno-avoid-vect</option></entry>
           </row>
 
           <row>

@@ -120,7 +120,7 @@ deSugar hsc_env
                               else return (binds, hpcInfo, emptyModBreaks)
 
                      initDs hsc_env mod rdr_env type_env $ do
-                       do { let ds_ev_binds = dsEvBinds ev_binds
+                       do { ds_ev_binds <- dsEvBinds ev_binds
                           ; core_prs <- dsTopLHsBinds binds_cvr
                           ; (spec_prs, spec_rules) <- dsImpSpecs imp_specs
                           ; (ds_fords, foreign_prs) <- dsForeigns fords
@@ -300,8 +300,8 @@ addExportFlagsAndRules target exports keep_alive rules prs
 	-- isExternalName separates the user-defined top-level names from those
 	-- introduced by the type checker.
     is_exported :: Name -> Bool
-    is_exported | target == HscInterpreted = isExternalName
-		| otherwise 		   = (`elemNameSet` exports)
+    is_exported | targetRetainsAllBindings target = isExternalName
+                | otherwise                       = (`elemNameSet` exports)
 \end{code}
 
 
