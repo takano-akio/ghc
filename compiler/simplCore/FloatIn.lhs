@@ -355,18 +355,18 @@ bindings are: (a)~inside the scrutinee, (b)~inside one of the
 alternatives/default [default FVs always {\em first}!].
 
 \begin{code}
-fiExpr to_drop (_, AnnCase scrut case_bndr _ [(DEFAULT,[],rhs)])
+fiExpr to_drop (_, AnnCase scrut case_bndr _ [(con,alt_bndrs,rhs)])
   | isUnLiftedType (idType case_bndr)
   , exprOkForSideEffects (deAnnotate scrut)
   = wrapFloats shared_binds $
     fiExpr (case_float : rhs_binds) rhs
   where
-    case_float = FB (unitVarSet case_bndr) scrut_fvs 
-                    (FloatCase scrut' case_bndr DEFAULT [])
+    case_float = FB (mkVarSet (case_bndr : alt_bndrs)) scrut_fvs 
+                    (FloatCase scrut' case_bndr con alt_bndrs)
     scrut' = fiExpr scrut_binds scrut
     [shared_binds, scrut_binds, rhs_binds]
        = sepBindsByDropPoint False [freeVarsOf scrut, rhs_fvs] to_drop
-    rhs_fvs   = freeVarsOf rhs `delVarSet` case_bndr
+    rhs_fvs   = freeVarsOf rhs `delVarSetList` (case_bndr : alt_bndrs)
     scrut_fvs = freeVarsOf scrut
 
 fiExpr to_drop (_, AnnCase scrut case_bndr ty alts)
