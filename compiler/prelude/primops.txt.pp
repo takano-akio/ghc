@@ -2194,10 +2194,6 @@ primtype FloatX4#
 primop FloatToFloatX4Op "floatToFloatX4#" GenPrimOp     
    Float# -> FloatX4#
 
-primop FloatX4InsertOp "insertFloatX4#" GenPrimOp     
-   FloatX4# -> Float# -> Int# -> FloatX4#
-   with can_fail = True
-
 primop FloatX4PackOp "packFloatX4#" GenPrimOp         
    Float# -> Float# -> Float# -> Float# -> FloatX4#
 
@@ -2289,10 +2285,6 @@ primtype DoubleX2#
 primop DoubleToDoubleX2Op "doubleToDoubleX2#" GenPrimOp     
    Double# -> DoubleX2#
 
-primop DoubleX2InsertOp "insertDoubleX2#" GenPrimOp     
-   DoubleX2# -> Double# -> Int# -> DoubleX2#
-   with can_fail = True
-
 primop DoubleX2PackOp "packDoubleX2#" GenPrimOp         
    Double# -> Double# -> DoubleX2#
 
@@ -2382,10 +2374,6 @@ primtype Int32X4#
 
 primop Int32ToInt32X4Op "int32ToInt32X4#" GenPrimOp     
    INT32 -> Int32X4#
-
-primop Int32X4InsertOp "insertInt32X4#" GenPrimOp     
-   Int32X4# -> INT32 -> Int# -> Int32X4#
-   with can_fail = True
 
 primop Int32X4PackOp "packInt32X4#" GenPrimOp         
    INT32 -> INT32 -> INT32 -> INT32 -> Int32X4#
@@ -2480,10 +2468,6 @@ primtype Int64X2#
 
 primop Int64ToInt64X2Op "int64ToInt64X2#" GenPrimOp     
    INT64 -> Int64X2#
-
-primop Int64X2InsertOp "insertInt64X2#" GenPrimOp     
-   Int64X2# -> INT64 -> Int# -> Int64X2#
-   with can_fail = True
 
 primop Int64X2PackOp "packInt64X2#" GenPrimOp         
    INT64 -> INT64 -> Int64X2#

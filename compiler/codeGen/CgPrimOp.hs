@@ -470,9 +470,6 @@ emitPrimOp [res] PopCntOp [w] live = emitPopCntCall res w wordWidth live
 emitPrimOp [res] FloatToFloatX4Op [e] _ =
     doVecPack Nothing vec4f32 [e,e,e,e] res
 
-emitPrimOp [res] FloatX4InsertOp [v,e,i] _ =
-    doVecInsert Nothing vec4f32 v e i res
-
 emitPrimOp [res] FloatX4PackOp es@[_,_,_,_] _ =
     doVecPack Nothing vec4f32 es res
 
@@ -481,9 +478,6 @@ emitPrimOp res@[_,_,_,_] FloatX4UnpackOp [arg] _ =
 
 emitPrimOp [res] DoubleToDoubleX2Op [e] _ =
     doVecPack Nothing vec2f64 [e,e] res
-
-emitPrimOp [res] DoubleX2InsertOp [v,e,i] _ =
-    doVecInsert Nothing vec2f64 v e i res
 
 emitPrimOp [res] DoubleX2PackOp es@[_,_] _ =
     doVecPack Nothing vec2f64 es res
@@ -494,9 +488,6 @@ emitPrimOp res@[_,_] DoubleX2UnpackOp [arg] _ =
 emitPrimOp [res] Int32ToInt32X4Op [e] _ =
     doVecPack (Just mo_WordTo32) vec4b32 [e,e,e,e] res
 
-emitPrimOp [res] Int32X4InsertOp [v,e,i] _ =
-    doVecInsert (Just mo_WordTo32) vec4b32 v e i res
-
 emitPrimOp [res] Int32X4PackOp es@[_,_,_,_] _ =
     doVecPack (Just mo_WordTo32) vec4b32 es res
 
@@ -505,9 +496,6 @@ emitPrimOp res@[_,_,_,_] Int32X4UnpackOp [arg] _ =
 
 emitPrimOp [res] Int64ToInt64X2Op [e] _ =
     doVecPack Nothing vec2b64 [e,e] res
-
-emitPrimOp [res] Int64X2InsertOp [v,e,i] _ =
-    doVecInsert Nothing vec2b64 v e i res
 
 emitPrimOp [res] Int64X2PackOp es@[_,_] _ =
     doVecPack Nothing vec2b64 es res
@@ -946,32 +934,6 @@ mkBasicIndexedWrite off (Just cast) write_rep base idx val
 
 ------------------------------------------------------------------------------
 -- Helpers for translating vector packing and unpacking.
-
-doVecInsert :: Maybe MachOp  -- Cast from element to vector component
-            -> CmmType       -- Vector type
-            -> CmmExpr       -- Source vector
-            -> CmmExpr       -- Element
-            -> CmmExpr       -- Index at which to insert element
-            -> CmmFormal     -- Destination for result
-            -> Code
-doVecInsert maybe_pre_write_cast ty src e idx res =
-    stmtC $ CmmAssign (CmmLocal res)
-                      (CmmMachOp (MO_V_Insert len wid) [src, cast e, idx'])
-  where
-    cast :: CmmExpr -> CmmExpr
-    cast val = case maybe_pre_write_cast of
-                 Nothing   -> val
-                 Just cast -> CmmMachOp cast [val]
-
-    -- vector indices are always 32-bits
-    idx' :: CmmExpr
-    idx' = CmmMachOp (MO_SS_Conv wordWidth W32) [idx]
-
-    len :: Length
-    len = vecLength ty 
-
-    wid :: Width
-    wid = typeWidth (vecType ty)
 
 doVecPack :: Maybe MachOp  -- Cast from element to vector component
           -> CmmType       -- Type of vector
