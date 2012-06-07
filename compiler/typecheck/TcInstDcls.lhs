@@ -51,7 +51,7 @@ import VarSet     ( mkVarSet, subVarSet, varSetElems )
 import Pair
 import CoreUnfold ( mkDFunUnfolding )
 import CoreSyn    ( Expr(Var), CoreExpr )
-import PrelNames  ( typeableClassNames )
+import PrelNames  ( typeableClassName, oldTypeableClassNames )
 
 import Bag
 import BasicTypes
@@ -419,7 +419,8 @@ tcInstDecls1 tycl_decls inst_decls deriv_decls
                 , deriv_binds)
     }}
   where
-    typInstCheck ty = is_cls (iSpec ty) `elem` typeableClassNames
+    typInstCheck ty = is_cls (iSpec ty) `elem`
+                        (typeableClassName : oldTypeableClassNames)
     typInstErr = ptext $ sLit $ "Can't create hand written instances of Typeable in Safe"
                               ++ " Haskell! Can only derive them"
 

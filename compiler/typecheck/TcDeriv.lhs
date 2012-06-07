@@ -569,6 +569,13 @@ deriveTyData tvs tc tc_args (L loc deriv_pred)
 		-- The "deriv_pred" is a LHsType to take account of the fact that for
 		-- newtype deriving we allow deriving (forall a. C [a]).
 
+                -- Typeable is special
+        ; if className cls == typeableClassName then do {
+          mkEqnHelp DerivOrigin
+                    (varSetElemsKvsFirst (mkVarSet tvs `extendVarSetList` deriv_tvs))
+                    cls cls_tys (mkTyConApp tc tc_args) Nothing
+        } else do {
+
 	-- Given data T a b c = ... deriving( C d ),
 	-- we want to drop type variables from T so that (C d (T a)) is well-kinded
 	; let cls_tyvars     = classTyVars cls
@@ -590,7 +597,8 @@ deriveTyData tvs tc tc_args (L loc deriv_pred)
 	; checkTc (n_args_to_keep >= 0 && (inst_ty_kind `eqKind` kind))
 		  (derivingKindErr tc cls cls_tys kind)
 
-	; checkTc (sizeVarSet dropped_tvs == n_args_to_drop && 		 -- (a)
+        ; pprTrace "deriveTyData" (ppr (inst_ty_kind, kind, tvs, univ_tvs, dropped_tvs)) 
+	$ checkTc (sizeVarSet dropped_tvs == n_args_to_drop && 		 -- (a)
 	           tyVarsOfTypes (inst_ty:cls_tys) `subVarSet` univ_tvs) -- (b)
 		  (derivingEtaErr cls cls_tys inst_ty)
 		-- Check that
@@ -606,7 +614,7 @@ deriveTyData tvs tc tc_args (L loc deriv_pred)
 	; checkTc (not (isFamilyTyCon tc) || n_args_to_drop == 0)
 		  (typeFamilyPapErr tc cls cls_tys inst_ty)
 
-	; mkEqnHelp DerivOrigin (varSetElemsKvsFirst univ_tvs) cls cls_tys inst_ty Nothing } 
+	; mkEqnHelp DerivOrigin (varSetElemsKvsFirst univ_tvs) cls cls_tys inst_ty Nothing } }
 \end{code}
 
 Note [Deriving, type families, and partial applications]
@@ -659,7 +667,17 @@ mkEqnHelp orig tvs cls cls_tys tc_app mtheta
      bale_out msg = failWithTc (derivingThingErr False cls cls_tys tc_app msg)
 
      mk_alg_eqn tycon tc_args
-      | className cls `elem` typeableClassNames
+      | className cls `elem` oldTypeableClassNames
+      = do { dflags <- getDynFlags
+           ; case checkOldTypeableConditions (dflags, tycon, tc_args) of
+               Just err -> bale_out err
+               Nothing  -> mk_old_typeable_eqn orig tvs cls tycon tc_args mtheta }
+
+      | isDataFamilyTyCon tycon
+      , length tc_args /= tyConArity tycon
+      = bale_out (ptext (sLit "Unsaturated data family application"))
+
+      | className cls == typeableClassName
       = do { dflags <- getDynFlags
            ; case checkTypeableConditions (dflags, tycon, tc_args) of
                Just err -> bale_out err
@@ -745,10 +763,10 @@ mk_data_eqn orig tvs cls tycon tc_args rep_tc rep_tc_args mtheta
     inst_tys = [mkTyConApp tycon tc_args]
 
 ----------------------
-mk_typeable_eqn :: CtOrigin -> [TyVar] -> Class
-   	    	-> TyCon -> [TcType] -> DerivContext
-   	    	-> TcM EarlyDerivSpec
-mk_typeable_eqn orig tvs cls tycon tc_args mtheta
+mk_old_typeable_eqn :: CtOrigin -> [TyVar] -> Class
+                    -> TyCon -> [TcType] -> DerivContext
+                    -> TcM EarlyDerivSpec
+mk_old_typeable_eqn orig tvs cls tycon tc_args mtheta
 	-- The Typeable class is special in several ways
 	-- 	  data T a b = ... deriving( Typeable )
 	-- gives
@@ -759,13 +777,12 @@ mk_typeable_eqn orig tvs cls tycon tc_args mtheta
 	-- 3. The actual class we want to generate isn't necessarily
 	--	Typeable; it depends on the arity of the type
   | isNothing mtheta	-- deriving on a data type decl
-  = do	{ checkTc (cls `hasKey` typeableClassKey)
+  = do	{ checkTc (cls `hasKey` oldTypeableClassKey)
 		  (ptext (sLit "Use deriving( Typeable ) on a data type declaration"))
-	; real_cls <- tcLookupClass (typeableClassNames !! tyConArity tycon)
-                      -- See Note [Getting base classes]
-	; mk_typeable_eqn orig tvs real_cls tycon [] (Just []) }
+	; real_cls <- tcLookupClass (oldTypeableClassNames !! tyConArity tycon)
+	; mk_old_typeable_eqn orig tvs real_cls tycon [] (Just []) }
 
-  | otherwise		-- standaone deriving
+  | otherwise		-- standalone deriving
   = do	{ checkTc (null tc_args)
 		  (ptext (sLit "Derived typeable instance must be of form (Typeable")
 			<> int (tyConArity tycon) <+> ppr tycon <> rparen)
@@ -776,6 +793,34 @@ mk_typeable_eqn orig tvs cls tycon tc_args mtheta
 		     , ds_cls = cls, ds_tys = [mkTyConApp tycon []]
 		     , ds_tc = tycon, ds_tc_args = []
 		     , ds_theta = mtheta `orElse` [], ds_newtype = False })  }
+
+mk_typeable_eqn :: CtOrigin -> [TyVar] -> Class
+                -> TyCon -> [TcType] -> DerivContext
+                -> TcM EarlyDerivSpec
+mk_typeable_eqn orig tvs cls tycon tc_args mtheta
+        -- The Typeable class is special in several ways
+        --        data T a b = ... deriving( Typeable )
+        -- gives
+        --        instance Typeable2 T where ...
+        -- Notice that:
+        -- 1. There are no constraints in the instance
+        -- 2. There are no type variables either
+        -- 3. The actual class we want to generate isn't necessarily
+        --      Typeable; it depends on the arity of the type
+  | isNothing mtheta    -- deriving on a data type decl
+  = mk_typeable_eqn orig tvs cls tycon [] (Just [])
+
+  | otherwise -- standalone deriving
+  = do  { checkTc (null tc_args)
+                  (ptext (sLit "Derived typeable instance must be of form (Typeable")
+                        <> int (tyConArity tycon) <+> ppr tycon <> rparen)
+        ; dfun_name <- pprTrace "mk_typeable_eqn" (ppr (orig, tvs, cls, tycon, tc_args, mtheta)) $ new_dfun_name cls tycon
+        ; loc <- getSrcSpanM
+        ; return (Right $
+                  DS { ds_loc = loc, ds_orig = orig, ds_name = dfun_name, ds_tvs = []
+                     , ds_cls = cls, ds_tys = [mkTyConApp tycon []]
+                     , ds_tc = tycon, ds_tc_args = []
+                     , ds_theta = mtheta `orElse` [], ds_newtype = False })  }
 
 ----------------------
 inferConstraints :: Class -> [TcType]
@@ -902,8 +947,9 @@ checkSideConditions dflags mtheta cls cls_tys rep_tc rep_tc_args
   where
     ty_args_why	= quotes (ppr (mkClassPred cls cls_tys)) <+> ptext (sLit "is not a class")
 
-checkTypeableConditions :: Condition
-checkTypeableConditions = checkFlag Opt_DeriveDataTypeable `andCond` cond_typeableOK
+checkTypeableConditions, checkOldTypeableConditions :: Condition
+checkTypeableConditions    = checkFlag Opt_DeriveDataTypeable `andCond` cond_typeableOK
+checkOldTypeableConditions = checkFlag Opt_DeriveDataTypeable `andCond` cond_oldTypeableOK
 
 nonStdErr :: Class -> SDoc
 nonStdErr cls = quotes (ppr cls) <+> ptext (sLit "is not a derivable class")
@@ -1032,6 +1078,21 @@ cond_isProduct (_, rep_tc, _)
     why = quotes (pprSourceTyCon rep_tc) <+>
 	  ptext (sLit "must have precisely one constructor")
 
+cond_oldTypeableOK :: Condition
+-- OK for Typeable class
+-- Currently: (a) args all of kind *
+--	      (b) 7 or fewer args
+cond_oldTypeableOK (_, tc, _)
+  | tyConArity tc > 7 = Just too_many
+  | not (all (isSubOpenTypeKind . tyVarKind) (tyConTyVars tc))
+                      = Just bad_kind
+  | otherwise	      = Nothing
+  where
+    too_many = quotes (pprSourceTyCon tc) <+>
+	       ptext (sLit "must have 7 or fewer arguments")
+    bad_kind = quotes (pprSourceTyCon tc) <+>
+	       ptext (sLit "must only have arguments of kind `*'")
+
 cond_typeableOK :: Condition
 -- OK for Typeable class
 -- Currently: (a) args all of kind *
@@ -1122,10 +1183,11 @@ non_iso_class :: Class -> Bool
 -- even with -XGeneralizedNewtypeDeriving
 non_iso_class cls
   = classKey cls `elem` ([ readClassKey, showClassKey, dataClassKey
-                         , genClassKey, gen1ClassKey] ++ typeableClassKeys)
+                         , genClassKey, gen1ClassKey, typeableClassKey]
+                         ++ oldTypeableClassKeys)
 
-typeableClassKeys :: [Unique]
-typeableClassKeys = map getUnique typeableClassNames
+oldTypeableClassKeys :: [Unique]
+oldTypeableClassKeys = map getUnique oldTypeableClassNames
 
 new_dfun_name :: Class -> TyCon -> TcM Name
 new_dfun_name clas tycon 	-- Just a simple wrapper
@@ -1553,7 +1615,11 @@ genDerivStuff :: SrcSpan -> FixityEnv -> Class -> Name -> TyCon
               -> Maybe CommonAuxiliary
               -> TcM (LHsBinds RdrName, BagDerivStuff)
 genDerivStuff loc fix_env clas name tycon comaux_maybe
-  | className clas `elem` typeableClassNames
+  | className clas `elem` oldTypeableClassNames
+  = do dflags <- getDynFlags
+       return (gen_old_Typeable_binds dflags loc tycon, emptyBag)
+
+  | className clas == typeableClassName
   = do dflags <- getDynFlags
        return (gen_Typeable_binds dflags loc tycon, emptyBag)
 
