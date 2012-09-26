@@ -597,8 +597,7 @@ deriveTyData tvs tc tc_args (L loc deriv_pred)
 	; checkTc (n_args_to_keep >= 0 && (inst_ty_kind `eqKind` kind))
 		  (derivingKindErr tc cls cls_tys kind)
 
-        ; pprTrace "deriveTyData" (ppr (inst_ty_kind, kind, tvs, univ_tvs, dropped_tvs)) 
-	$ checkTc (sizeVarSet dropped_tvs == n_args_to_drop && 		 -- (a)
+        ; checkTc (sizeVarSet dropped_tvs == n_args_to_drop && 		 -- (a)
 	           tyVarsOfTypes (inst_ty:cls_tys) `subVarSet` univ_tvs) -- (b)
 		  (derivingEtaErr cls cls_tys inst_ty)
 		-- Check that
@@ -673,15 +672,11 @@ mkEqnHelp orig tvs cls cls_tys tc_app mtheta
                Just err -> bale_out err
                Nothing  -> mk_old_typeable_eqn orig tvs cls tycon tc_args mtheta }
 
-      | isDataFamilyTyCon tycon
-      , length tc_args /= tyConArity tycon
-      = bale_out (ptext (sLit "Unsaturated data family application"))
-
       | className cls == typeableClassName
       = do { dflags <- getDynFlags
            ; case checkTypeableConditions (dflags, tycon, tc_args) of
                Just err -> bale_out err
-               Nothing  -> mk_typeable_eqn orig tvs cls tycon tc_args mtheta }
+               Nothing  -> mk_typeable_eqn orig tvs cls cls_tys tycon tc_args mtheta }
 
       | isDataFamilyTyCon tycon
       , length tc_args /= tyConArity tycon
@@ -794,31 +789,23 @@ mk_old_typeable_eqn orig tvs cls tycon tc_args mtheta
 		     , ds_tc = tycon, ds_tc_args = []
 		     , ds_theta = mtheta `orElse` [], ds_newtype = False })  }
 
-mk_typeable_eqn :: CtOrigin -> [TyVar] -> Class
+mk_typeable_eqn :: CtOrigin -> [TyVar] -> Class -> [Type]
                 -> TyCon -> [TcType] -> DerivContext
                 -> TcM EarlyDerivSpec
-mk_typeable_eqn orig tvs cls tycon tc_args mtheta
-        -- The Typeable class is special in several ways
-        --        data T a b = ... deriving( Typeable )
-        -- gives
-        --        instance Typeable2 T where ...
-        -- Notice that:
-        -- 1. There are no constraints in the instance
-        -- 2. There are no type variables either
-        -- 3. The actual class we want to generate isn't necessarily
-        --      Typeable; it depends on the arity of the type
+mk_typeable_eqn orig tvs cls cls_tys tycon tc_args mtheta
+        -- JPM: update this comment
   | isNothing mtheta    -- deriving on a data type decl
-  = mk_typeable_eqn orig tvs cls tycon [] (Just [])
+  = mk_typeable_eqn orig tvs cls cls_tys tycon [] (Just [])
 
   | otherwise -- standalone deriving
   = do  { checkTc (null tc_args)
                   (ptext (sLit "Derived typeable instance must be of form (Typeable")
                         <> int (tyConArity tycon) <+> ppr tycon <> rparen)
-        ; dfun_name <- pprTrace "mk_typeable_eqn" (ppr (orig, tvs, cls, tycon, tc_args, mtheta)) $ new_dfun_name cls tycon
+        ; dfun_name <- new_dfun_name cls tycon
         ; loc <- getSrcSpanM
         ; return (Right $
                   DS { ds_loc = loc, ds_orig = orig, ds_name = dfun_name, ds_tvs = []
-                     , ds_cls = cls, ds_tys = [mkTyConApp tycon []]
+                     , ds_cls = cls, ds_tys = cls_tys ++ [mkTyConApp tycon []]
                      , ds_tc = tycon, ds_tc_args = []
                      , ds_theta = mtheta `orElse` [], ds_newtype = False })  }
 
@@ -1094,6 +1081,7 @@ cond_oldTypeableOK (_, tc, _)
 	       ptext (sLit "must only have arguments of kind `*'")
 
 cond_typeableOK :: Condition
+-- JPM: update
 -- OK for Typeable class
 -- Currently: (a) args all of kind *
 --	      (b) 7 or fewer args
