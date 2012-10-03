@@ -293,6 +293,7 @@ data DynFlag
    | Opt_IrrefutableTuples
    | Opt_CmmSink
    | Opt_CmmElimCommonBlocks
+   | Opt_OmitYields
 
    -- Interface files
    | Opt_IgnoreInterfacePragmas
@@ -509,6 +510,7 @@ data ExtensionFlag
    | Opt_TraditionalRecordSyntax
    | Opt_LambdaCase
    | Opt_MultiWayIf
+   | Opt_TypeHoles
    deriving (Eq, Enum, Show)
 
 -- | Contains not only a collection of 'DynFlag's but also a plethora of
@@ -2275,6 +2277,7 @@ fFlags = [
   ( "irrefutable-tuples",               Opt_IrrefutableTuples, nop ),
   ( "cmm-sink",                         Opt_CmmSink, nop ),
   ( "cmm-elim-common-blocks",           Opt_CmmElimCommonBlocks, nop ),
+  ( "omit-yields",                      Opt_OmitYields, nop ),
   ( "gen-manifest",                     Opt_GenManifest, nop ),
   ( "embed-manifest",                   Opt_EmbedManifest, nop ),
   ( "ext-core",                         Opt_EmitExternalCore, nop ),
@@ -2449,7 +2452,8 @@ xFlags = [
   ( "OverlappingInstances",             Opt_OverlappingInstances, nop ),
   ( "UndecidableInstances",             Opt_UndecidableInstances, nop ),
   ( "IncoherentInstances",              Opt_IncoherentInstances, nop ),
-  ( "PackageImports",                   Opt_PackageImports, nop )
+  ( "PackageImports",                   Opt_PackageImports, nop ),
+  ( "TypeHoles",                        Opt_TypeHoles, nop )
   ]
 
 defaultFlags :: Platform -> [DynFlag]
@@ -2458,6 +2462,8 @@ defaultFlags platform
       Opt_Static,
 
       Opt_SharedImplib,
+
+      Opt_OmitYields,
 
       Opt_GenManifest,
       Opt_EmbedManifest,
