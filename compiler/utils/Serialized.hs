@@ -43,15 +43,23 @@ instance Binary Serialized where
         return (Serialized the_type bytes)
 
 -- | Put a Typeable value that we are able to actually turn into bytes into a 'Serialized' value ready for deserialization later
-toSerialized :: Typeable a => (a -> [Word8]) -> a -> Serialized
+toSerialized :: forall a. Typeable a => (a -> [Word8]) -> a -> Serialized
+#if __GLASGOW_HASKELL__ > 706
+toSerialized serialize what = Serialized (typeRep (Proxy :: Proxy a)) (serialize what)
+#else
 toSerialized serialize what = Serialized (typeOf what) (serialize what)
+#endif
 
 -- | If the 'Serialized' value contains something of the given type, then use the specified deserializer to return @Just@ that.
 -- Otherwise return @Nothing@.
 fromSerialized :: forall a. Typeable a => ([Word8] -> a) -> Serialized -> Maybe a
 fromSerialized deserialize (Serialized the_type bytes)
-  | the_type == typeOf (undefined :: a) = Just (deserialize bytes)
-  | otherwise                           = Nothing
+#if __GLASGOW_HASKELL__ > 706
+  | the_type == typeRep (Proxy :: Proxy a) = Just (deserialize bytes)
+#else
+  | the_type == typeOf (undefined :: a)    = Just (deserialize bytes)
+#endif
+  | otherwise                              = Nothing
 
 -- | Force the contents of the Serialized value so weknow it doesn't contain any bottoms
 seqSerialized :: Serialized -> ()
