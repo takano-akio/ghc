@@ -676,7 +676,7 @@ mkEqnHelp orig tvs cls cls_tys tc_app mtheta
       = do { dflags <- getDynFlags
            ; case checkTypeableConditions (dflags, tycon, tc_args) of
                Just err -> bale_out err
-               Nothing  -> mk_typeable_eqn orig tvs cls cls_tys tycon tc_args mtheta }
+               Nothing  -> mk_typeable_eqn orig tvs cls tycon tc_args mtheta }
 
       | isDataFamilyTyCon tycon
       , length tc_args /= tyConArity tycon
@@ -789,23 +789,24 @@ mk_old_typeable_eqn orig tvs cls tycon tc_args mtheta
 		     , ds_tc = tycon, ds_tc_args = []
 		     , ds_theta = mtheta `orElse` [], ds_newtype = False })  }
 
-mk_typeable_eqn :: CtOrigin -> [TyVar] -> Class -> [Type]
+mk_typeable_eqn :: CtOrigin -> [TyVar] -> Class
                 -> TyCon -> [TcType] -> DerivContext
                 -> TcM EarlyDerivSpec
-mk_typeable_eqn orig tvs cls cls_tys tycon tc_args mtheta
-        -- JPM: update this comment
+mk_typeable_eqn orig tvs cls tycon tc_args mtheta
+  -- The kind-polymorphic Typeable class is less special; namely, there is no
+  -- need to select the class with the right kind anymore, as we only have one.
   | isNothing mtheta    -- deriving on a data type decl
-  = mk_typeable_eqn orig tvs cls cls_tys tycon [] (Just [])
+  = mk_typeable_eqn orig tvs cls tycon [] (Just [])
 
   | otherwise -- standalone deriving
   = do  { checkTc (null tc_args)
                   (ptext (sLit "Derived typeable instance must be of form (Typeable")
-                        <> int (tyConArity tycon) <+> ppr tycon <> rparen)
+                        <+> ppr tycon <> rparen)
         ; dfun_name <- new_dfun_name cls tycon
         ; loc <- getSrcSpanM
         ; return (Right $
                   DS { ds_loc = loc, ds_orig = orig, ds_name = dfun_name, ds_tvs = []
-                     , ds_cls = cls, ds_tys = cls_tys ++ [mkTyConApp tycon []]
+                     , ds_cls = cls, ds_tys = tyConKind tycon : [mkTyConApp tycon []]
                      , ds_tc = tycon, ds_tc_args = []
                      , ds_theta = mtheta `orElse` [], ds_newtype = False })  }
 
@@ -935,7 +936,7 @@ checkSideConditions dflags mtheta cls cls_tys rep_tc rep_tc_args
     ty_args_why	= quotes (ppr (mkClassPred cls cls_tys)) <+> ptext (sLit "is not a class")
 
 checkTypeableConditions, checkOldTypeableConditions :: Condition
-checkTypeableConditions    = checkFlag Opt_DeriveDataTypeable `andCond` cond_typeableOK
+checkTypeableConditions    = checkFlag Opt_DeriveDataTypeable
 checkOldTypeableConditions = checkFlag Opt_DeriveDataTypeable `andCond` cond_oldTypeableOK
 
 nonStdErr :: Class -> SDoc
@@ -1066,26 +1067,10 @@ cond_isProduct (_, rep_tc, _)
 	  ptext (sLit "must have precisely one constructor")
 
 cond_oldTypeableOK :: Condition
--- OK for Typeable class
+-- OK for kind-monomorphic Typeable class
 -- Currently: (a) args all of kind *
 --	      (b) 7 or fewer args
 cond_oldTypeableOK (_, tc, _)
-  | tyConArity tc > 7 = Just too_many
-  | not (all (isSubOpenTypeKind . tyVarKind) (tyConTyVars tc))
-                      = Just bad_kind
-  | otherwise	      = Nothing
-  where
-    too_many = quotes (pprSourceTyCon tc) <+>
-	       ptext (sLit "must have 7 or fewer arguments")
-    bad_kind = quotes (pprSourceTyCon tc) <+>
-	       ptext (sLit "must only have arguments of kind `*'")
-
-cond_typeableOK :: Condition
--- JPM: update
--- OK for Typeable class
--- Currently: (a) args all of kind *
---	      (b) 7 or fewer args
-cond_typeableOK (_, tc, _)
   | tyConArity tc > 7 = Just too_many
   | not (all (isSubOpenTypeKind . tyVarKind) (tyConTyVars tc))
                       = Just bad_kind
