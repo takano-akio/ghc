@@ -105,32 +105,6 @@ checkStackFrame( StgPtr c )
 
     /* All activation records have 'bitmap' style layout info. */
     switch (info->i.type) {
-    case RET_DYN: /* Dynamic bitmap: the mask is stored on the stack */
-    {
-	StgWord dyn;
-	StgPtr p;
-	StgRetDyn* r;
-	
-	r = (StgRetDyn *)c;
-	dyn = r->liveness;
-	
-	p = (P_)(r->payload);
-	checkSmallBitmap(p,RET_DYN_LIVENESS(r->liveness),RET_DYN_BITMAP_SIZE);
-	p += RET_DYN_BITMAP_SIZE + RET_DYN_NONPTR_REGS_SIZE;
-
-	// skip over the non-pointers
-	p += RET_DYN_NONPTRS(dyn);
-	
-	// follow the ptr words
-	for (size = RET_DYN_PTRS(dyn); size > 0; size--) {
-	    checkClosureShallow((StgClosure *)*p);
-	    p++;
-	}
-	
-	return sizeofW(StgRetDyn) + RET_DYN_BITMAP_SIZE +
-	    RET_DYN_NONPTR_REGS_SIZE +
-	    RET_DYN_NONPTRS(dyn) + RET_DYN_PTRS(dyn);
-    }
 
     case UPDATE_FRAME:
       ASSERT(LOOKS_LIKE_CLOSURE_PTR(((StgUpdateFrame*)c)->updatee));
@@ -308,6 +282,7 @@ checkClosure( StgClosure* p )
     case MUT_PRIM:
     case MUT_VAR_CLEAN:
     case MUT_VAR_DIRTY:
+    case TVAR:
     case CONSTR_STATIC:
     case CONSTR_NOCAF_STATIC:
     case THUNK_STATIC:
@@ -381,7 +356,6 @@ checkClosure( StgClosure* p )
     case RET_BCO:
     case RET_SMALL:
     case RET_BIG:
-    case RET_DYN:
     case UPDATE_FRAME:
     case UNDERFLOW_FRAME:
     case STOP_FRAME:
@@ -526,6 +500,9 @@ checkSTACK (StgStack *stack)
 void
 checkTSO(StgTSO *tso)
 {
+    StgTSO *next;
+    const StgInfoTable *info;
+
     if (tso->what_next == ThreadKilled) {
       /* The garbage collector doesn't bother following any pointers
        * from dead threads, so don't check sanity here.  
@@ -533,9 +510,13 @@ checkTSO(StgTSO *tso)
       return;
     }
 
-    ASSERT(tso->_link == END_TSO_QUEUE || 
-           tso->_link->header.info == &stg_MVAR_TSO_QUEUE_info ||
-           tso->_link->header.info == &stg_TSO_info);
+    next = tso->_link;
+    info = (const StgInfoTable*) tso->_link->header.info;
+
+    ASSERT(next == END_TSO_QUEUE ||
+           info == &stg_MVAR_TSO_QUEUE_info ||
+           info == &stg_TSO_info ||
+           info == &stg_WHITEHOLE_info); // happens due to STM doing lockTSO()
 
     if (   tso->why_blocked == BlockedOnMVar
 	|| tso->why_blocked == BlockedOnBlackHole

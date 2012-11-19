@@ -18,7 +18,7 @@ module RnEnv (
         lookupInstDeclBndr, lookupSubBndrOcc, lookupFamInstName,
         greRdrName,
         lookupSubBndrGREs, lookupConstructorFields,
-        lookupSyntaxName, lookupSyntaxTable, lookupIfThenElse,
+        lookupSyntaxName, lookupSyntaxNames, lookupIfThenElse,
         lookupGreRn, lookupGreLocalRn, lookupGreRn_maybe,
         getLookupOccRn, addUsedRdrNames,
 
@@ -52,7 +52,7 @@ import Name
 import NameSet
 import NameEnv
 import Avail
-import Module           ( ModuleName, moduleName )
+import Module
 import UniqFM
 import DataCon          ( dataConFieldLabels, dataConTyCon )
 import TyCon            ( isTupleTyCon, tyConArity )
@@ -619,7 +619,7 @@ lookupOccRn_maybe rdr_name
          -- imports. We can and should instead check the qualified import
          -- but at the moment this requires some refactoring so leave as a TODO
        ; dflags <- getDynFlags
-       ; let allow_qual = dopt Opt_ImplicitImportQualified dflags &&
+       ; let allow_qual = gopt Opt_ImplicitImportQualified dflags &&
                           not (safeDirectImpsReq dflags)
        ; is_ghci <- getIsGHCi
                -- This test is not expensive,
@@ -1179,27 +1179,23 @@ lookupIfThenElse
 lookupSyntaxName :: Name                                -- The standard name
                  -> RnM (SyntaxExpr Name, FreeVars)     -- Possibly a non-standard name
 lookupSyntaxName std_name
-  = xoptM Opt_RebindableSyntax          `thenM` \ rebindable_on ->
-    if not rebindable_on then normal_case
-    else
-        -- Get the similarly named thing from the local environment
-    lookupOccRn (mkRdrUnqual (nameOccName std_name)) `thenM` \ usr_name ->
-    return (HsVar usr_name, unitFV usr_name)
-  where
-    normal_case = return (HsVar std_name, emptyFVs)
+  = do { rebindable_on <- xoptM Opt_RebindableSyntax
+       ; if not rebindable_on then 
+           return (HsVar std_name, emptyFVs)
+         else
+            -- Get the similarly named thing from the local environment
+           do { usr_name <- lookupOccRn (mkRdrUnqual (nameOccName std_name))
+              ; return (HsVar usr_name, unitFV usr_name) } }
 
-lookupSyntaxTable :: [Name]                             -- Standard names
-                  -> RnM (SyntaxTable Name, FreeVars)   -- See comments with HsExpr.ReboundNames
-lookupSyntaxTable std_names
-  = xoptM Opt_RebindableSyntax          `thenM` \ rebindable_on ->
-    if not rebindable_on then normal_case
-    else
-        -- Get the similarly named thing from the local environment
-    mapM (lookupOccRn . mkRdrUnqual . nameOccName) std_names    `thenM` \ usr_names ->
-
-    return (std_names `zip` map HsVar usr_names, mkFVs usr_names)
-  where
-    normal_case = return (std_names `zip` map HsVar std_names, emptyFVs)
+lookupSyntaxNames :: [Name]                          -- Standard names
+                  -> RnM ([HsExpr Name], FreeVars)   -- See comments with HsExpr.ReboundNames
+lookupSyntaxNames std_names
+  = do { rebindable_on <- xoptM Opt_RebindableSyntax
+       ; if not rebindable_on then 
+             return (map HsVar std_names, emptyFVs)
+        else
+          do { usr_names <- mapM (lookupOccRn . mkRdrUnqual . nameOccName) std_names
+             ; return (map HsVar usr_names, mkFVs usr_names) } }
 \end{code}
 
 
@@ -1311,7 +1307,7 @@ checkDupAndShadowedNames envs names
 -------------------------------------
 checkShadowedOccs :: (GlobalRdrEnv, LocalRdrEnv) -> [(SrcSpan,OccName)] -> RnM ()
 checkShadowedOccs (global_env,local_env) loc_occs
-  = ifWOptM Opt_WarnNameShadowing $
+  = whenWOptM Opt_WarnNameShadowing $
     do  { traceRn (text "shadow" <+> ppr loc_occs)
         ; mapM_ check_shadow loc_occs }
   where
@@ -1363,7 +1359,7 @@ unboundName wl rdr = unboundNameX wl rdr empty
 
 unboundNameX :: WhereLooking -> RdrName -> SDoc -> RnM Name
 unboundNameX where_look rdr_name extra
-  = do  { show_helpful_errors <- doptM Opt_HelpfulErrors
+  = do  { show_helpful_errors <- goptM Opt_HelpfulErrors
         ; let what = pprNonVarNameSpace (occNameSpace (rdrNameOcc rdr_name))
               err = unknownNameErr what rdr_name $$ extra
         ; if not show_helpful_errors
@@ -1542,7 +1538,7 @@ mapFvRnCPS f (x:xs) cont = f x             $ \ x' ->
 \begin{code}
 warnUnusedTopBinds :: [GlobalRdrElt] -> RnM ()
 warnUnusedTopBinds gres
-    = ifWOptM Opt_WarnUnusedBinds
+    = whenWOptM Opt_WarnUnusedBinds
     $ do isBoot <- tcIsHsBoot
          let noParent gre = case gre_par gre of
                             NoParent -> True
@@ -1560,7 +1556,7 @@ warnUnusedMatches    = check_unused Opt_WarnUnusedMatches
 
 check_unused :: WarningFlag -> [Name] -> FreeVars -> RnM ()
 check_unused flag bound_names used_names
- = ifWOptM flag (warnUnusedLocals (filterOut (`elemNameSet` used_names) bound_names))
+ = whenWOptM flag (warnUnusedLocals (filterOut (`elemNameSet` used_names) bound_names))
 
 -------------------------
 --      Helpers

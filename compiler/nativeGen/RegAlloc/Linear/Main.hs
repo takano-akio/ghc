@@ -116,7 +116,7 @@ import Instruction
 import Reg
 
 import BlockId
-import OldCmm hiding (RegSet)
+import Cmm hiding (RegSet)
 
 import Digraph
 import DynFlags
@@ -150,12 +150,12 @@ regAlloc _ (CmmData sec d)
                 , Nothing
                 , Nothing )
 
-regAlloc _ (CmmProc (LiveInfo info _ _ _) lbl [])
-        = return ( CmmProc info lbl (ListGraph [])
+regAlloc _ (CmmProc (LiveInfo info _ _ _) lbl live [])
+        = return ( CmmProc info lbl live (ListGraph [])
                  , Nothing
                  , Nothing )
 
-regAlloc dflags (CmmProc static lbl sccs)
+regAlloc dflags (CmmProc static lbl live sccs)
         | LiveInfo info (Just first_id) (Just block_live) _     <- static
         = do
                 -- do register allocation on each component.
@@ -174,12 +174,12 @@ regAlloc dflags (CmmProc static lbl sccs)
                       | otherwise
                       = Nothing
 
-                return  ( CmmProc info lbl (ListGraph (first' : rest'))
+                return  ( CmmProc info lbl live (ListGraph (first' : rest'))
                         , extra_stack
                         , Just stats)
 
 -- bogus. to make non-exhaustive match warning go away.
-regAlloc _ (CmmProc _ _ _)
+regAlloc _ (CmmProc _ _ _ _)
         = panic "RegAllocLinear.regAlloc: no match"
 
 
@@ -208,6 +208,9 @@ linearRegAlloc dflags first_id block_live sccs
       ArchPPC       -> linearRegAlloc' dflags (frInitFreeRegs platform :: PPC.FreeRegs)    first_id block_live sccs
       ArchARM _ _ _ -> panic "linearRegAlloc ArchARM"
       ArchPPC_64    -> panic "linearRegAlloc ArchPPC_64"
+      ArchAlpha     -> panic "linearRegAlloc ArchAlpha"
+      ArchMipseb    -> panic "linearRegAlloc ArchMipseb"
+      ArchMipsel    -> panic "linearRegAlloc ArchMipsel"
       ArchUnknown   -> panic "linearRegAlloc ArchUnknown"
 
 linearRegAlloc'
@@ -434,9 +437,20 @@ raInsn block_live new_instrs id (LiveInstr (Instr instr) (Just live))
                         (uniqSetToList $ liveDieRead live)
                         (uniqSetToList $ liveDieWrite live)
 
-
 raInsn _ _ _ instr
         = pprPanic "raInsn" (text "no match for:" <> ppr instr)
+
+-- ToDo: what can we do about
+--
+--     R1 = x
+--     jump I64[x] // [R1]
+--
+-- where x is mapped to the same reg as R1.  We want to coalesce x and
+-- R1, but the register allocator doesn't know whether x will be
+-- assigned to again later, in which case x and R1 should be in
+-- different registers.  Right now we assume the worst, and the
+-- assignment to R1 will clobber x, so we'll spill x into another reg,
+-- generating another reg->reg move.
 
 
 isInReg :: Reg -> RegMap Loc -> Bool
@@ -732,12 +746,13 @@ allocateRegsAndSpill reading keep spills alloc (r:rs)
                 Just (InMem slot) | reading   -> doSpill (ReadMem slot)
                                   | otherwise -> doSpill WriteMem
                 Nothing | reading   ->
-                   -- pprPanic "allocateRegsAndSpill: Cannot read from uninitialized register" (ppr r)
-                   -- ToDo: This case should be a panic, but we
-                   -- sometimes see an unreachable basic block which
-                   -- triggers this because the register allocator
-                   -- will start with an empty assignment.
-                   doSpill WriteNew
+                   pprPanic "allocateRegsAndSpill: Cannot read from uninitialized register" (ppr r)
+                   -- NOTE: if the input to the NCG contains some
+                   -- unreachable blocks with junk code, this panic
+                   -- might be triggered.  Make sure you only feed
+                   -- sensible code into the NCG.  In CmmPipeline we
+                   -- call removeUnreachableBlocks at the end for this
+                   -- reason.
 
                         | otherwise -> doSpill WriteNew
 

@@ -39,8 +39,6 @@ module DsUtils (
 
         mkSelectorBinds,
 
-        dsSyntaxTable, lookupEvidence,
-
 	selectSimpleMatchVarL, selectMatchVars, selectMatchVar,
         mkOptTickBox, mkBinaryTickBox
     ) where
@@ -48,7 +46,6 @@ module DsUtils (
 #include "HsVersions.h"
 
 import {-# SOURCE #-}	Match ( matchSimply )
-import {-# SOURCE #-}	DsExpr( dsExpr )
 
 import HsSyn
 import TcHsSyn
@@ -60,7 +57,6 @@ import CoreUtils
 import MkCore
 import MkId
 import Id
-import Name
 import Literal
 import TyCon
 import DataCon
@@ -71,47 +67,17 @@ import TysWiredIn
 import BasicTypes
 import UniqSet
 import UniqSupply
+import Module
 import PrelNames
 import Outputable
 import SrcLoc
 import Util
-import ListSetOps
 import DynFlags
 import FastString
 
 import Control.Monad    ( zipWithM )
 \end{code}
 
-
-%************************************************************************
-%*									*
-		Rebindable syntax
-%*									*
-%************************************************************************
-
-\begin{code}
-dsSyntaxTable :: SyntaxTable Id 
-	       -> DsM ([CoreBind], 	-- Auxiliary bindings
-		       [(Name,Id)])	-- Maps the standard name to its value
-
-dsSyntaxTable rebound_ids = do
-    (binds_s, prs) <- mapAndUnzipM mk_bind rebound_ids
-    return (concat binds_s, prs)
-  where
-        -- The cheapo special case can happen when we 
-        -- make an intermediate HsDo when desugaring a RecStmt
-    mk_bind (std_name, HsVar id) = return ([], (std_name, id))
-    mk_bind (std_name, expr) = do
-           rhs <- dsExpr expr
-           id <- newSysLocalDs (exprType rhs)
-           return ([NonRec id rhs], (std_name, id))
-
-lookupEvidence :: [(Name, Id)] -> Name -> Id
-lookupEvidence prs std_name
-  = assocDefault (mk_panic std_name) prs std_name
-  where
-    mk_panic std_name = pprPanic "dsSyntaxTable" (ptext (sLit "Not found:") <+> ppr std_name)
-\end{code}
 
 %************************************************************************
 %*									*
@@ -794,7 +760,7 @@ mkOptTickBox (Just tickish) e = Tick tickish e
 mkBinaryTickBox :: Int -> Int -> CoreExpr -> DsM CoreExpr
 mkBinaryTickBox ixT ixF e = do
        uq <- newUnique 	
-       this_mod <- getModuleDs
+       this_mod <- getModule
        let bndr1 = mkSysLocal (fsLit "t1") uq boolTy
        let
            falseBox = Tick (HpcTick this_mod ixF) (Var falseDataConId)

@@ -147,7 +147,7 @@ tcRnModule hsc_env hsc_src save_rn_syntax
         let { prel_imports = mkPrelImports (moduleName this_mod) prel_imp_loc
                                          implicit_prelude import_decls } ;
 
-        ifWOptM Opt_WarnImplicitPrelude $
+        whenWOptM Opt_WarnImplicitPrelude $
              when (notNull prel_imports) $ addWarn (implicitPreludeWarn) ;
 
         tcg_env <- {-# SCC "tcRnImports" #-}
@@ -1201,7 +1201,7 @@ setInteractiveContext hsc_env icxt thing_inside
 --
 -- The returned TypecheckedHsExpr is of type IO [ () ], a list of the bound
 -- values, coerced to ().
-tcRnStmt :: HscEnv -> InteractiveContext -> LStmt RdrName
+tcRnStmt :: HscEnv -> InteractiveContext -> GhciLStmt RdrName
          -> IO (Messages, Maybe ([Id], LHsExpr Id, FixityEnv))
 tcRnStmt hsc_env ictxt rdr_stmt
   = initTcPrintErrors hsc_env iNTERACTIVE $
@@ -1312,10 +1312,10 @@ runPlans (p:ps) = tryTcLIE_ (runPlans ps) p
 -- for more details. We do this lifting by trying different ways ('plans') of
 -- lifting the code into the IO monad and type checking each plan until one
 -- succeeds.
-tcUserStmt :: LStmt RdrName -> TcM (PlanResult, FixityEnv)
+tcUserStmt :: GhciLStmt RdrName -> TcM (PlanResult, FixityEnv)
 
 -- An expression typed at the prompt is treated very specially
-tcUserStmt (L loc (ExprStmt expr _ _ _))
+tcUserStmt (L loc (BodyStmt expr _ _ _))
   = do  { (rn_expr, fvs) <- checkNoErrs (rnLExpr expr)
                -- Don't try to typecheck if the renamer fails!
         ; ghciStep <- getGhciStepIO
@@ -1339,7 +1339,7 @@ tcUserStmt (L loc (ExprStmt expr _ _ _))
                                            (HsVar bindIOName) noSyntaxExpr
 
               -- [; print it]
-              print_it  = L loc $ ExprStmt (nlHsApp (nlHsVar interPrintName) (nlHsVar fresh_it))
+              print_it  = L loc $ BodyStmt (nlHsApp (nlHsVar interPrintName) (nlHsVar fresh_it))
                                            (HsVar thenIOName) noSyntaxExpr placeHolderType
 
         -- The plans are:
@@ -1351,7 +1351,7 @@ tcUserStmt (L loc (ExprStmt expr _ _ _))
         -- naked expression. Deferring type errors here is unhelpful because the
         -- expression gets evaluated right away anyway. It also would potentially
         -- emit two redundant type-error warnings, one from each plan.
-        ; plan <- unsetDOptM Opt_DeferTypeErrors $ runPlans [
+        ; plan <- unsetGOptM Opt_DeferTypeErrors $ runPlans [
                     -- Plan A
                     do { stuff@([it_id], _) <- tcGhciStmts [bind_stmt, print_it]
                        ; it_ty <- zonkTcType (idType it_id)
@@ -1375,7 +1375,7 @@ tcUserStmt (L loc (ExprStmt expr _ _ _))
 
 tcUserStmt rdr_stmt@(L loc _)
   = do { (([rn_stmt], fix_env), fvs) <- checkNoErrs $
-           rnStmts GhciStmt [rdr_stmt] $ \_ -> do
+           rnStmts GhciStmtCtxt rnLExpr [rdr_stmt] $ \_ -> do
              fix_env <- getFixityEnv
              return (fix_env, emptyFVs)
             -- Don't try to typecheck if the renamer fails!
@@ -1388,7 +1388,7 @@ tcUserStmt rdr_stmt@(L loc _)
                            = L loc $ BindStmt pat (nlHsApp ghciStep expr) op1 op2
                | otherwise = rn_stmt
 
-       ; opt_pr_flag <- doptM Opt_PrintBindResult
+       ; opt_pr_flag <- goptM Opt_PrintBindResult
        ; let print_result_plan
                | opt_pr_flag                         -- The flag says "print result"   
                , [v] <- collectLStmtBinders gi_stmt  -- One binder
@@ -1407,19 +1407,19 @@ tcUserStmt rdr_stmt@(L loc _)
            ; when (isUnitTy v_ty || not (isTauTy v_ty)) failM
            ; return stuff }
       where
-        print_v  = L loc $ ExprStmt (nlHsApp (nlHsVar printName) (nlHsVar v))
+        print_v  = L loc $ BodyStmt (nlHsApp (nlHsVar printName) (nlHsVar v))
                                     (HsVar thenIOName) noSyntaxExpr placeHolderType
 
 -- | Typecheck the statements given and then return the results of the
 -- statement in the form 'IO [()]'.
-tcGhciStmts :: [LStmt Name] -> TcM PlanResult
+tcGhciStmts :: [GhciLStmt Name] -> TcM PlanResult
 tcGhciStmts stmts
  = do { ioTyCon <- tcLookupTyCon ioTyConName ;
         ret_id  <- tcLookupId returnIOName ;            -- return @ IO
         let {
             ret_ty      = mkListTy unitTy ;
             io_ret_ty   = mkTyConApp ioTyCon [ret_ty] ;
-            tc_io_stmts = tcStmtsAndThen GhciStmt tcDoStmt stmts io_ret_ty ;
+            tc_io_stmts = tcStmtsAndThen GhciStmtCtxt tcDoStmt stmts io_ret_ty ;
             names = collectLStmtsBinders stmts ;
          } ;
 
@@ -1455,7 +1455,7 @@ tcGhciStmts stmts
             stmts = tc_stmts ++ [noLoc (mkLastStmt ret_expr)]
         } ;
         return (ids, mkHsDictLet (EvBinds const_binds) $
-                     noLoc (HsDo GhciStmt stmts io_ret_ty))
+                     noLoc (HsDo GhciStmtCtxt stmts io_ret_ty))
     }
 
 -- | Generate a typed ghciStepIO expression (ghciStep :: Ty a -> IO a)
@@ -1701,15 +1701,9 @@ tcRnGetInfo :: HscEnv
 --  *and* as a type or class constructor;
 -- hence the call to dataTcOccs, and we return up to two results
 tcRnGetInfo hsc_env name
-  = initTcPrintErrors hsc_env iNTERACTIVE $
-    tcRnGetInfo' hsc_env name
-
-tcRnGetInfo' :: HscEnv
-             -> Name
-             -> TcRn (TyThing, Fixity, [ClsInst])
-tcRnGetInfo' hsc_env name
   = let ictxt = hsc_IC hsc_env in
-    setInteractiveContext hsc_env ictxt $ do
+    initTcPrintErrors hsc_env iNTERACTIVE $
+    setInteractiveContext hsc_env ictxt  $ do
 
         -- Load the interface for all unqualified types and classes
         -- That way we will find all the instance declarations

@@ -14,8 +14,7 @@ module CmmInfo (
 
 #include "HsVersions.h"
 
-import OldCmm as Old
-
+import Cmm
 import CmmUtils
 import CLabel
 import SMRep
@@ -42,8 +41,8 @@ mkEmptyContInfoTable info_lbl
                  , cit_prof = NoProfilingInfo
                  , cit_srt  = NoC_SRT }
 
-cmmToRawCmm :: DynFlags -> Stream IO Old.CmmGroup ()
-            -> IO (Stream IO Old.RawCmmGroup ())
+cmmToRawCmm :: DynFlags -> Stream IO CmmGroup ()
+            -> IO (Stream IO RawCmmGroup ())
 cmmToRawCmm dflags cmms
   = do { uniqs <- mkSplitUniqSupply 'i'
        ; let do_one uniqs cmm = do
@@ -90,7 +89,7 @@ mkInfoTable :: DynFlags -> CmmDecl -> UniqSM [RawCmmDecl]
 mkInfoTable _ (CmmData sec dat)
   = return [CmmData sec dat]
 
-mkInfoTable dflags proc@(CmmProc infos entry_lbl blocks)
+mkInfoTable dflags proc@(CmmProc infos entry_lbl live blocks)
   --
   -- in the non-tables-next-to-code case, procs can have at most a
   -- single info table associated with the entry label of the proc.
@@ -99,7 +98,7 @@ mkInfoTable dflags proc@(CmmProc infos entry_lbl blocks)
   = case topInfoTable proc of   --  must be at most one
       -- no info table
       Nothing ->
-         return [CmmProc mapEmpty entry_lbl blocks]
+         return [CmmProc mapEmpty entry_lbl live blocks]
 
       Just info@CmmInfoTable { cit_lbl = info_lbl } -> do
         (top_decls, (std_info, extra_bits)) <-
@@ -108,21 +107,13 @@ mkInfoTable dflags proc@(CmmProc infos entry_lbl blocks)
           rel_std_info   = map (makeRelativeRefTo dflags info_lbl) std_info
           rel_extra_bits = map (makeRelativeRefTo dflags info_lbl) extra_bits
         --
-        case blocks of
-          ListGraph [] ->
-              -- No code; only the info table is significant
-              -- Use a zero place-holder in place of the
-              -- entry-label in the info table
-              return (top_decls ++
-                      [mkRODataLits info_lbl (zeroCLit dflags : rel_std_info ++
-                                                                rel_extra_bits)])
-          _nonempty ->
-             -- Separately emit info table (with the function entry
-             -- point as first entry) and the entry code
-             return (top_decls ++
-                     [CmmProc mapEmpty entry_lbl blocks,
-                      mkDataLits Data info_lbl
-                         (CmmLabel entry_lbl : rel_std_info ++ rel_extra_bits)])
+        -- Separately emit info table (with the function entry
+        -- point as first entry) and the entry code
+        --
+        return (top_decls ++
+                [CmmProc mapEmpty entry_lbl live blocks,
+                 mkDataLits Data info_lbl
+                    (CmmLabel entry_lbl : rel_std_info ++ rel_extra_bits)])
 
   --
   -- With tables-next-to-code, we can have many info tables,
@@ -132,9 +123,10 @@ mkInfoTable dflags proc@(CmmProc infos entry_lbl blocks)
   --
   | otherwise
   = do
-    (top_declss, raw_infos) <- unzip `fmap` mapM do_one_info (mapToList infos)
+    (top_declss, raw_infos) <-
+       unzip `fmap` mapM do_one_info (mapToList (info_tbls infos))
     return (concat top_declss ++
-            [CmmProc (mapFromList raw_infos) entry_lbl blocks])
+            [CmmProc (mapFromList raw_infos) entry_lbl live blocks])
 
   where
    do_one_info (lbl,itbl) = do
@@ -155,7 +147,7 @@ type InfoTableContents = ( [CmmLit]	     -- The standard part
 
 mkInfoTableContents :: DynFlags
                     -> CmmInfoTable
-                    -> Maybe StgHalfWord    -- Override default RTS type tag?
+                    -> Maybe Int               -- Override default RTS type tag?
                     -> UniqSM ([RawCmmDecl],             -- Auxiliary top decls
                                InfoTableContents)	-- Info tbl + extra bits
 
@@ -178,22 +170,19 @@ mkInfoTableContents dflags
        ; let
              std_info = mkStdInfoTable dflags prof_lits rts_tag srt_bitmap liveness_lit
              rts_tag | Just tag <- mb_rts_tag = tag
-                     | null liveness_data     = rET_SMALL dflags -- Fits in extra_bits
-                     | otherwise              = rET_BIG   dflags -- Does not; extra_bits is
-                                                                 -- a label
+                     | null liveness_data     = rET_SMALL -- Fits in extra_bits
+                     | otherwise              = rET_BIG   -- Does not; extra_bits is
+                                                          -- a label
        ; return (prof_data ++ liveness_data, (std_info, srt_label)) }
 
   | HeapRep _ ptrs nonptrs closure_type <- smrep
-  = do { let layout  = packHalfWordsCLit
-                           dflags
-                           (toStgHalfWord dflags (toInteger ptrs))
-                           (toStgHalfWord dflags (toInteger nonptrs))
+  = do { let layout  = packIntsCLit dflags ptrs nonptrs
        ; (prof_lits, prof_data) <- mkProfLits dflags prof
        ; let (srt_label, srt_bitmap) = mkSRTLit dflags srt
        ; (mb_srt_field, mb_layout, extra_bits, ct_data)
                                 <- mk_pieces closure_type srt_label
        ; let std_info = mkStdInfoTable dflags prof_lits
-                                       (mb_rts_tag   `orElse` rtsClosureType dflags smrep)
+                                       (mb_rts_tag   `orElse` rtsClosureType smrep)
                                        (mb_srt_field `orElse` srt_bitmap)
                                        (mb_layout    `orElse` layout)
        ; return (prof_data ++ ct_data, (std_info, extra_bits)) }
@@ -205,24 +194,25 @@ mkInfoTableContents dflags
                  	, [RawCmmDecl])	     -- Auxiliary data decls 
     mk_pieces (Constr con_tag con_descr) _no_srt    -- A data constructor
       = do { (descr_lit, decl) <- newStringLit con_descr
-      	   ; return (Just con_tag, Nothing, [descr_lit], [decl]) }
+           ; return ( Just (toStgHalfWord dflags (fromIntegral con_tag))
+                    , Nothing, [descr_lit], [decl]) }
 
     mk_pieces Thunk srt_label
       = return (Nothing, Nothing, srt_label, [])
 
     mk_pieces (ThunkSelector offset) _no_srt
-      = return (Just (toStgHalfWord dflags 0), Just (mkWordCLit dflags offset), [], [])
+      = return (Just (toStgHalfWord dflags 0), Just (mkWordCLit dflags (fromIntegral offset)), [], [])
          -- Layout known (one free var); we use the layout field for offset
 
     mk_pieces (Fun arity (ArgSpec fun_type)) srt_label 
-      = do { let extra_bits = packHalfWordsCLit dflags fun_type arity : srt_label
+      = do { let extra_bits = packIntsCLit dflags fun_type arity : srt_label
            ; return (Nothing, Nothing,  extra_bits, []) }
 
     mk_pieces (Fun arity (ArgGen arg_bits)) srt_label
       = do { (liveness_lit, liveness_data) <- mkLivenessBits dflags arg_bits
-           ; let fun_type | null liveness_data = aRG_GEN     dflags
-                          | otherwise          = aRG_GEN_BIG dflags
-                 extra_bits = [ packHalfWordsCLit dflags fun_type arity
+           ; let fun_type | null liveness_data = aRG_GEN
+                          | otherwise          = aRG_GEN_BIG
+                 extra_bits = [ packIntsCLit dflags fun_type arity
                               , srt_lit, liveness_lit, slow_entry ]
            ; return (Nothing, Nothing, extra_bits, liveness_data) }
       where
@@ -233,8 +223,13 @@ mkInfoTableContents dflags
 
     mk_pieces BlackHole _ = panic "mk_pieces: BlackHole"
 
-
 mkInfoTableContents _ _ _ = panic "mkInfoTableContents"   -- NonInfoTable dealt with earlier
+
+packIntsCLit :: DynFlags -> Int -> Int -> CmmLit
+packIntsCLit dflags a b = packHalfWordsCLit dflags
+                           (toStgHalfWord dflags (fromIntegral a))
+                           (toStgHalfWord dflags (fromIntegral b))
+
 
 mkSRTLit :: DynFlags
          -> C_SRT
@@ -314,7 +309,7 @@ mkLivenessBits dflags liveness
                  [mkRODataLits bitmap_lbl lits]) }
 
   | otherwise -- Fits in one word
-  = return (mkWordCLit dflags bitmap_word, [])
+  = return (mkStgWordCLit dflags bitmap_word, [])
   where
     n_bits = length liveness
 
@@ -328,7 +323,8 @@ mkLivenessBits dflags liveness
     bitmap_word = toStgWord dflags (fromIntegral n_bits)
               .|. (small_bitmap `shiftL` bITMAP_BITS_SHIFT dflags)
 
-    lits = mkWordCLit dflags (toStgWord dflags (fromIntegral n_bits)) : map (mkWordCLit dflags) bitmap
+    lits = mkWordCLit dflags (fromIntegral n_bits)
+         : map (mkStgWordCLit dflags) bitmap
       -- The first word is the size.  The structure must match
       -- StgLargeBitmap in includes/rts/storage/InfoTable.h
 
@@ -348,8 +344,8 @@ mkLivenessBits dflags liveness
 mkStdInfoTable
    :: DynFlags
    -> (CmmLit,CmmLit)	-- Closure type descr and closure descr  (profiling)
-   -> StgHalfWord	-- Closure RTS tag 
-   -> StgHalfWord	-- SRT length
+   -> Int               -- Closure RTS tag
+   -> StgHalfWord       -- SRT length
    -> CmmLit		-- layout field
    -> [CmmLit]
 
@@ -362,10 +358,10 @@ mkStdInfoTable dflags (type_descr, closure_descr) cl_type srt_len layout_lit
 
  where  
     prof_info 
-	| dopt Opt_SccProfilingOn dflags = [type_descr, closure_descr]
+	| gopt Opt_SccProfilingOn dflags = [type_descr, closure_descr]
 	| otherwise = []
 
-    type_lit = packHalfWordsCLit dflags cl_type srt_len
+    type_lit = packHalfWordsCLit dflags (toStgHalfWord dflags (fromIntegral cl_type)) srt_len
 
 -------------------------------------------------------------------------
 --

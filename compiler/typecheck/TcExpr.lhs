@@ -318,10 +318,13 @@ tcExpr (OpApp arg1 op fix arg2) res_ty
 
        -- Make sure that the argument and result types have kind '*'
        -- Eg we do not want to allow  (D#  $  4.0#)   Trac #5570
-       -- ($) :: forall ab. (a->b) -> a -> b
-       ; a_ty <- newFlexiTyVarTy liftedTypeKind
-       ; b_ty <- newFlexiTyVarTy liftedTypeKind
+       --    (which gives a seg fault)
+       -- We do this by unifying with a MetaTv; but of course
+       -- it must allow foralls in the type it unifies with (hence PolyTv)!
 
+       -- ($) :: forall ab. (a->b) -> a -> b
+       ; a_ty <- newPolyFlexiTyVarTy
+       ; b_ty <- newPolyFlexiTyVarTy
        ; arg2' <- tcArg op (arg2, arg2_ty, 2)
 
        ; co_res <- unifyType b_ty res_ty        -- b ~ res
@@ -473,14 +476,6 @@ tcExpr (HsDo do_or_lc stmts _) res_ty
 tcExpr (HsProc pat cmd) res_ty
   = do	{ (pat', cmd', coi) <- tcProc pat cmd res_ty
 	; return $ mkHsWrapCo coi (HsProc pat' cmd') }
-
-tcExpr e@(HsArrApp _ _ _ _ _) _
-  = failWithTc (vcat [ptext (sLit "The arrow command"), nest 2 (ppr e), 
-                      ptext (sLit "was found where an expression was expected")])
-
-tcExpr e@(HsArrForm _ _ _) _
-  = failWithTc (vcat [ptext (sLit "The arrow command"), nest 2 (ppr e), 
-                      ptext (sLit "was found where an expression was expected")])
 \end{code}
 
 Note [Rebindable syntax for if]
@@ -831,8 +826,7 @@ tcExpr (PArrSeq _ _) _
 #ifdef GHCI	/* Only if bootstrapped */
 	-- Rename excludes these cases otherwise
 tcExpr (HsSpliceE splice) res_ty = tcSpliceExpr splice res_ty
-tcExpr (HsBracket brack)  res_ty = do	{ e <- tcBracket brack res_ty
-					; return (unLoc e) }
+tcExpr (HsBracket brack)  res_ty = tcBracket brack res_ty
 tcExpr e@(HsQuasiQuoteE _) _ =
     pprPanic "Should never see HsQuasiQuoteE in type checker" (ppr e)
 #endif /* GHCI */
@@ -847,6 +841,7 @@ tcExpr e@(HsQuasiQuoteE _) _ =
 
 \begin{code}
 tcExpr other _ = pprPanic "tcMonoExpr" (ppr other)
+  -- Include ArrForm, ArrApp, which shouldn't appear at all
 \end{code}
 
 

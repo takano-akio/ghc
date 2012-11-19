@@ -10,7 +10,7 @@ module StgCmmBind (
         cgTopRhsClosure,
         cgBind,
         emitBlackHoleCode,
-        pushUpdateFrame
+        pushUpdateFrame, emitUpdateFrame
   ) where
 
 #include "HsVersions.h"
@@ -37,7 +37,6 @@ import CLabel
 import StgSyn
 import CostCentre
 import Id
-import Control.Monad
 import Name
 import Module
 import ListSetOps
@@ -47,6 +46,8 @@ import Outputable
 import FastString
 import Maybes
 import DynFlags
+
+import Control.Monad
 
 ------------------------------------------------------------------------
 --              Top-level bindings
@@ -272,7 +273,7 @@ mkRhsClosure    dflags bndr _cc _bi
         && all (isGcPtrRep . idPrimRep . stripNV) fvs
         && isUpdatable upd_flag
         && arity <= mAX_SPEC_AP_SIZE dflags
-        && not (dopt Opt_SccProfilingOn dflags)
+        && not (gopt Opt_SccProfilingOn dflags)
                                   -- not when profiling: we don't want to
                                   -- lose information about this particular
                                   -- thunk (e.g. its type) (#949)
@@ -449,7 +450,7 @@ closureCodeBody top_lvl bndr cl_info cc args arity body fv_details
         ; emitClosureProcAndInfoTable top_lvl bndr lf_info info_tbl args $
             \(_offset, node, arg_regs) -> do
                 -- Emit slow-entry code (for entering a closure through a PAP)
-                { mkSlowEntryCode cl_info arg_regs
+                { mkSlowEntryCode bndr cl_info arg_regs
 
                 ; dflags <- getDynFlags
                 ; let lf_info = closureLFInfo cl_info
@@ -460,7 +461,7 @@ closureCodeBody top_lvl bndr cl_info cc args arity body fv_details
                     (CmmMachOp (mo_wordSub dflags)
                          [ CmmReg nodeReg
                          , mkIntExpr dflags (funTag dflags cl_info) ])
-                ; whenC node_points (ldvEnterClosure cl_info)
+                ; when node_points (ldvEnterClosure cl_info)
                 ; granYield arg_regs node_points
 
                 -- Main payload
@@ -493,21 +494,22 @@ load_fvs node lf_info = mapM_ (\ (reg, off) ->
 --
 -- The slow entry point is used for unknown calls: eg. stg_PAP_entry
 
-mkSlowEntryCode :: ClosureInfo -> [LocalReg] -> FCode ()
+mkSlowEntryCode :: Id -> ClosureInfo -> [LocalReg] -> FCode ()
 -- If this function doesn't have a specialised ArgDescr, we need
 -- to generate the function's arg bitmap and slow-entry code.
 -- Here, we emit the slow-entry code.
-mkSlowEntryCode cl_info arg_regs -- function closure is already in `Node'
+mkSlowEntryCode bndr cl_info arg_regs -- function closure is already in `Node'
   | Just (_, ArgGen _) <- closureFunInfo cl_info
   = do dflags <- getDynFlags
-       let slow_lbl = closureSlowEntryLabel  cl_info
+       let node = idToReg dflags (NonVoid bndr)
+           slow_lbl = closureSlowEntryLabel  cl_info
            fast_lbl = closureLocalEntryLabel dflags cl_info
            -- mkDirectJump does not clobber `Node' containing function closure
-           jump = mkDirectJump dflags
-                               (mkLblExpr fast_lbl)
-                               (map (CmmReg . CmmLocal) arg_regs)
-                               (initUpdFrameOff dflags)
-       emitProcWithConvention Slow Nothing slow_lbl arg_regs jump
+           jump = mkJump dflags NativeNodeCall
+                                (mkLblExpr fast_lbl)
+                                (map (CmmReg . CmmLocal) (node : arg_regs))
+                                (initUpdFrameOff dflags)
+       emitProcWithConvention Slow Nothing slow_lbl (node : arg_regs) jump
   | otherwise = return ()
 
 -----------------------------------------
@@ -525,8 +527,8 @@ thunkCode cl_info fv_details _cc node arity body
         ; entryHeapCheck cl_info node' arity [] $ do
         { -- Overwrite with black hole if necessary
           -- but *after* the heap-overflow check
-        ; whenC (blackHoleOnEntry cl_info && node_points)
-                (blackHoleIt cl_info)
+        ; when (blackHoleOnEntry cl_info && node_points)
+                (blackHoleIt cl_info node)
 
           -- Push update frame
         ; setupUpdate cl_info node $
@@ -545,13 +547,14 @@ thunkCode cl_info fv_details _cc node arity body
 --              Update and black-hole wrappers
 ------------------------------------------------------------------------
 
-blackHoleIt :: ClosureInfo -> FCode ()
+blackHoleIt :: ClosureInfo -> LocalReg -> FCode ()
 -- Only called for closures with no args
 -- Node points to the closure
-blackHoleIt closure_info = emitBlackHoleCode (closureSingleEntry closure_info)
+blackHoleIt closure_info node
+  = emitBlackHoleCode (closureSingleEntry closure_info) (CmmReg (CmmLocal node))
 
-emitBlackHoleCode :: Bool -> FCode ()
-emitBlackHoleCode is_single_entry = do
+emitBlackHoleCode :: Bool -> CmmExpr -> FCode ()
+emitBlackHoleCode is_single_entry node = do
   dflags <- getDynFlags
 
   -- Eager blackholing is normally disabled, but can be turned on with
@@ -572,18 +575,18 @@ emitBlackHoleCode is_single_entry = do
   -- Note the eager-blackholing check is here rather than in blackHoleOnEntry,
   -- because emitBlackHoleCode is called from CmmParse.
 
-  let  eager_blackholing =  not (dopt Opt_SccProfilingOn dflags)
-                         && dopt Opt_EagerBlackHoling dflags
+  let  eager_blackholing =  not (gopt Opt_SccProfilingOn dflags)
+                         && gopt Opt_EagerBlackHoling dflags
              -- Profiling needs slop filling (to support LDV
              -- profiling), so currently eager blackholing doesn't
              -- work with profiling.
 
-  whenC eager_blackholing $ do
+  when eager_blackholing $ do
     tickyBlackHole (not is_single_entry)
-    emitStore (cmmOffsetW dflags (CmmReg nodeReg) (fixedHdrSize dflags))
+    emitStore (cmmOffsetW dflags node (fixedHdrSize dflags))
                   (CmmReg (CmmGlobal CurrentTSO))
     emitPrimCall [] MO_WriteBarrier []
-    emitStore (CmmReg nodeReg) (CmmReg (CmmGlobal EagerBlackholeInfo))
+    emitStore node (CmmReg (CmmGlobal EagerBlackholeInfo))
 
 setupUpdate :: ClosureInfo -> LocalReg -> FCode () -> FCode ()
         -- Nota Bene: this function does not change Node (even if it's a CAF),
@@ -601,8 +604,8 @@ setupUpdate closure_info node body
           dflags <- getDynFlags
           let
               bh = blackHoleOnEntry closure_info &&
-                   not (dopt Opt_SccProfilingOn dflags) &&
-                   dopt Opt_EagerBlackHoling dflags
+                   not (gopt Opt_SccProfilingOn dflags) &&
+                   gopt Opt_EagerBlackHoling dflags
 
               lbl | bh        = mkBHUpdInfoLabel
                   | otherwise = mkUpdInfoLabel
@@ -634,12 +637,19 @@ pushUpdateFrame lbl updatee body
        let
            hdr         = fixedHdrSize dflags * wORD_SIZE dflags
            frame       = updfr + hdr + sIZEOF_StgUpdateFrame_NoHdr dflags
-           off_updatee = hdr + oFFSET_StgUpdateFrame_updatee dflags
        --
-       emitStore (CmmStackSlot Old frame) (mkLblExpr lbl)
-       emitStore (CmmStackSlot Old (frame - off_updatee)) updatee
-       initUpdFrameProf frame
+       emitUpdateFrame dflags (CmmStackSlot Old frame) lbl updatee
        withUpdFrameOff frame body
+
+emitUpdateFrame :: DynFlags -> CmmExpr -> CLabel -> CmmExpr -> FCode ()
+emitUpdateFrame dflags frame lbl updatee = do
+  let
+           hdr         = fixedHdrSize dflags * wORD_SIZE dflags
+           off_updatee = hdr + oFFSET_StgUpdateFrame_updatee dflags
+  --
+  emitStore frame (mkLblExpr lbl)
+  emitStore (cmmOffset dflags frame off_updatee) updatee
+  initUpdFrameProf frame
 
 -----------------------------------------------------------------------------
 -- Entering a CAF
@@ -719,7 +729,7 @@ link_caf node _is_upd = do
         -- assuming lots of things, like the stack pointer hasn't
         -- moved since we entered the CAF.
        (let target = entryCode dflags (closureInfoPtr dflags (CmmReg (CmmLocal node))) in
-        mkJump dflags target [] updfr)
+        mkJump dflags NativeNodeCall target [] updfr)
 
   ; return hp_rel }
 
