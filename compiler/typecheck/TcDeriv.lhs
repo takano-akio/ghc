@@ -606,7 +606,7 @@ deriveTyData tvs tc tc_args (L loc deriv_pred)
         ; checkTc (not (isFamilyTyCon tc) || n_args_to_drop == 0)
                   (typeFamilyPapErr tc cls cls_tys inst_ty)
 
-        ; mkEqnHelp DerivOrigin (varSetElemsKvsFirst univ_tvs) cls cls_tys inst_ty Nothing }
+        ; mkEqnHelp DerivOrigin (varSetElemsKvsFirst univ_tvs) cls cls_tys inst_ty Nothing } }
 \end{code}
 
 Note [Deriving, type families, and partial applications]
@@ -767,7 +767,7 @@ mk_old_typeable_eqn orig tvs cls tycon tc_args mtheta
   | isNothing mtheta    -- deriving on a data type decl
   = do  { checkTc (cls `hasKey` oldTypeableClassKey)
                   (ptext (sLit "Use deriving( Typeable ) on a data type declaration"))
-        ; real_cls <- tcLookupClass (typeableClassNames !! tyConArity tycon)
+        ; real_cls <- tcLookupClass (oldTypeableClassNames !! tyConArity tycon)
                       -- See Note [Getting base classes]
         ; mk_old_typeable_eqn orig tvs real_cls tycon [] (Just []) }
 
