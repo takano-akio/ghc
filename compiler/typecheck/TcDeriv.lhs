@@ -308,7 +308,15 @@ tcDeriving tycl_decls inst_decls deriv_decls
                 -- And make the necessary "equations".
           is_boot <- tcIsHsBoot
         ; traceTc "tcDeriving" (ppr is_boot)
-        ; early_specs <- makeDerivSpecs is_boot tycl_decls inst_decls deriv_decls
+
+        -- If -XAutoDeriveTypeable is on, add Typeable instances for each
+        -- datatype and class defined in this module
+        ; isAutoDeriveTypeable <- xoptM Opt_AutoDeriveTypeable
+        ; let deriv_decls' = deriv_decls ++ if isAutoDeriveTypeable
+                                              then deriveTypeable tycl_decls
+                                              else []
+
+        ; early_specs <- makeDerivSpecs is_boot tycl_decls inst_decls deriv_decls'
 
         -- for each type, determine the auxliary declarations that are common
         -- to multiple derivations involving that type (e.g. Generic and
@@ -363,6 +371,11 @@ tcDeriving tycl_decls inst_decls deriv_decls
 
     hangP s x = text "" $$ hang (ptext (sLit s)) 2 x
 
+    deriveTypeable :: [LTyClDecl Name] -> [LDerivDecl Name]
+    deriveTypeable tys =
+      [ L l (DerivDecl (L l (HsAppTy (noLoc (HsTyVar typeableClassName))
+                                     (L l (HsTyVar (tcdName t))))))
+      | L l t <- tys ]
 
 
 -- As of 24 April 2012, this only shares MetaTyCons between derivations of

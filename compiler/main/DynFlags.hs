@@ -415,6 +415,7 @@ data WarningFlag =
    | Opt_WarnPointlessPragmas
    | Opt_WarnUnsupportedCallingConventions
    | Opt_WarnInlineRuleShadowing
+   | Opt_WarnTypeableInstances
    deriving (Eq, Show, Enum)
 
 data Language = Haskell98 | Haskell2010
@@ -481,6 +482,7 @@ data ExtensionFlag
  
    | Opt_StandaloneDeriving
    | Opt_DeriveDataTypeable
+   | Opt_AutoDeriveTypeable       -- Automatic derivation of Typeable
    | Opt_DeriveFunctor
    | Opt_DeriveTraversable
    | Opt_DeriveFoldable
@@ -2299,7 +2301,8 @@ fWarningFlags = [
   ( "warn-safe",                        Opt_WarnSafe, setWarnSafe ),
   ( "warn-pointless-pragmas",           Opt_WarnPointlessPragmas, nop ),
   ( "warn-unsupported-calling-conventions", Opt_WarnUnsupportedCallingConventions, nop ),
-  ( "warn-inline-rule-shadowing",       Opt_WarnInlineRuleShadowing, nop ) ]
+  ( "warn-inline-rule-shadowing",       Opt_WarnInlineRuleShadowing, nop ),
+  ( "warn-typeable-instances",          Opt_WarnTypeableInstances, nop ) ]
 
 -- | These @-\<blah\>@ flags can all be reversed with @-no-\<blah\>@
 negatableFlags :: [FlagSpec GeneralFlag]
@@ -2528,6 +2531,7 @@ xFlags = [
   ( "UnboxedTuples",                    Opt_UnboxedTuples, nop ),
   ( "StandaloneDeriving",               Opt_StandaloneDeriving, nop ),
   ( "DeriveDataTypeable",               Opt_DeriveDataTypeable, nop ),
+  ( "AutoDeriveTypeable",               Opt_AutoDeriveTypeable, nop ),
   ( "DeriveFunctor",                    Opt_DeriveFunctor, nop ),
   ( "DeriveTraversable",                Opt_DeriveTraversable, nop ),
   ( "DeriveFoldable",                   Opt_DeriveFoldable, nop ),
@@ -2681,7 +2685,8 @@ standardWarnings
         Opt_WarnAlternativeLayoutRuleTransitional,
         Opt_WarnPointlessPragmas,
         Opt_WarnUnsupportedCallingConventions,
-        Opt_WarnInlineRuleShadowing
+        Opt_WarnInlineRuleShadowing,
+        Opt_WarnTypeableInstances
       ]
 
 minusWOpts :: [WarningFlag]
