@@ -387,11 +387,10 @@ mkIface_ hsc_env maybe_old_fingerprint
        } 
 
 -----------------------------
-writeIfaceFile :: DynFlags -> ModLocation -> ModIface -> IO ()
-writeIfaceFile dflags location new_iface
+writeIfaceFile :: DynFlags -> FilePath -> ModIface -> IO ()
+writeIfaceFile dflags hi_file_path new_iface
     = do createDirectoryIfMissing True (takeDirectory hi_file_path)
          writeBinIface dflags hi_file_path new_iface
-    where hi_file_path = ml_hi_file location
 
 
 -- -----------------------------------------------------------------------------
@@ -1124,7 +1123,7 @@ check_old_iface hsc_env mod_summary src_modified maybe_iface
              read_result <- readIface (ms_mod mod_summary) iface_path False
              case read_result of
                  Failed err -> do
-                     traceIf (text "FYI: cannont read old interface file:" $$ nest 4 err)
+                     traceIf (text "FYI: cannot read old interface file:" $$ nest 4 err)
                      return Nothing
                  Succeeded iface -> do
                      traceIf (text "Read the interface file" <+> text iface_path)

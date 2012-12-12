@@ -27,6 +27,7 @@ module DynFlags (
         wopt, wopt_set, wopt_unset,
         xopt, xopt_set, xopt_unset,
         lang_set,
+        whenGeneratingDynamicToo, ifGeneratingDynamicToo, doDynamicToo,
         DynFlags(..),
         HasDynFlags(..), ContainsDynFlags(..),
         RtsOptsEnabled(..),
@@ -269,6 +270,7 @@ data GeneralFlag
    | Opt_DoEtaReduction
    | Opt_CaseMerge
    | Opt_UnboxStrictFields
+   | Opt_UnboxStrictPrimitiveFields
    | Opt_DictsCheap
    | Opt_EnableRewriteRules             -- Apply rewrite rules during simplification
    | Opt_Vectorise
@@ -370,6 +372,8 @@ data GeneralFlag
    | Opt_KeepTmpFiles
    | Opt_KeepRawTokenStream
    | Opt_KeepLlvmFiles
+
+   | Opt_BuildDynamicToo
 
    -- safe haskell flags
    | Opt_DistrustAllPackages
@@ -578,6 +582,10 @@ data DynFlags = DynFlags {
   hcSuf                 :: String,
   hiSuf                 :: String,
 
+  canGenerateDynamicToo :: IORef Bool,
+  dynObjectSuf          :: String,
+  dynHiSuf              :: String,
+
   outputFile            :: Maybe String,
   outputHi              :: Maybe String,
   dynLibLoader          :: DynLibLoader,
@@ -702,6 +710,7 @@ class HasDynFlags m where
 
 class ContainsDynFlags t where
     extractDynFlags :: t -> DynFlags
+    replaceDynFlags :: t -> DynFlags -> t
 
 data ProfAuto
   = NoProfAuto         -- ^ no SCC annotations added
@@ -963,7 +972,7 @@ data Way
   | WayGran
   | WayNDP
   | WayDyn
-  deriving (Eq,Ord)
+  deriving (Eq, Ord, Show)
 
 allowed_combination :: [Way] -> Bool
 allowed_combination way = and [ x `allowedWith` y
@@ -1041,24 +1050,24 @@ wayGeneralFlags _ WayPar      = [Opt_Parallel]
 wayGeneralFlags _ WayGran     = [Opt_GranMacros]
 wayGeneralFlags _ WayNDP      = []
 
-wayExtras :: Platform -> Way -> DynP ()
-wayExtras _ WayThreaded = return ()
-wayExtras _ WayDebug    = return ()
-wayExtras _ WayDyn      = return ()
-wayExtras _ WayProf     = return ()
-wayExtras _ WayEventLog = return ()
-wayExtras _ WayPar      = exposePackage "concurrent"
-wayExtras _ WayGran     = exposePackage "concurrent"
-wayExtras _ WayNDP      = do setExtensionFlag Opt_ParallelArrays
-                             setGeneralFlag Opt_Vectorise
+wayExtras :: Platform -> Way -> DynFlags -> DynFlags
+wayExtras _ WayThreaded dflags = dflags
+wayExtras _ WayDebug    dflags = dflags
+wayExtras _ WayDyn      dflags = dflags
+wayExtras _ WayProf     dflags = dflags
+wayExtras _ WayEventLog dflags = dflags
+wayExtras _ WayPar      dflags = exposePackage' "concurrent" dflags
+wayExtras _ WayGran     dflags = exposePackage' "concurrent" dflags
+wayExtras _ WayNDP      dflags = setExtensionFlag' Opt_ParallelArrays
+                               $ setGeneralFlag' Opt_Vectorise dflags
 
 wayOptc :: Platform -> Way -> [String]
 wayOptc platform WayThreaded = case platformOS platform of
                                OSOpenBSD -> ["-pthread"]
                                OSNetBSD  -> ["-pthread"]
                                _         -> []
-wayOptc _ WayDebug      = ["-O0", "-g"]
-wayOptc _ WayDyn        = ["-DDYNAMIC"]
+wayOptc _ WayDebug      = []
+wayOptc _ WayDyn        = []
 wayOptc _ WayProf       = ["-DPROFILING"]
 wayOptc _ WayEventLog   = ["-DTRACING"]
 wayOptc _ WayPar        = ["-DPAR", "-w"]
@@ -1098,18 +1107,40 @@ wayOptl _ WayNDP        = []
 wayOptP :: Platform -> Way -> [String]
 wayOptP _ WayThreaded = []
 wayOptP _ WayDebug    = []
-wayOptP _ WayDyn      = ["-DDYNAMIC"]
+wayOptP _ WayDyn      = []
 wayOptP _ WayProf     = ["-DPROFILING"]
 wayOptP _ WayEventLog = ["-DTRACING"]
 wayOptP _ WayPar      = ["-D__PARALLEL_HASKELL__"]
 wayOptP _ WayGran     = ["-D__GRANSIM__"]
 wayOptP _ WayNDP      = []
 
+whenGeneratingDynamicToo :: MonadIO m => DynFlags -> m () -> m ()
+whenGeneratingDynamicToo dflags f = ifGeneratingDynamicToo dflags f (return ())
+
+ifGeneratingDynamicToo :: MonadIO m => DynFlags -> m a -> m a -> m a
+ifGeneratingDynamicToo dflags f g
+    = if gopt Opt_BuildDynamicToo dflags
+      then do let ref = canGenerateDynamicToo dflags
+              b <- liftIO $ readIORef ref
+              if b then f else g
+      else g
+
+doDynamicToo :: DynFlags -> DynFlags
+doDynamicToo dflags0 = let dflags1 = unSetGeneralFlag' Opt_Static dflags0
+                           dflags2 = addWay' WayDyn dflags1
+                           dflags3 = dflags2 {
+                                         hiSuf = dynHiSuf dflags2,
+                                         objectSuf = dynObjectSuf dflags2
+                                     }
+                           dflags4 = updateWays dflags3
+                       in dflags4
+
 -----------------------------------------------------------------------------
 
 -- | Used by 'GHC.newSession' to partially initialize a new 'DynFlags' value
 initDynFlags :: DynFlags -> IO DynFlags
 initDynFlags dflags = do
+ refCanGenerateDynamicToo <- newIORef True
  refFilesToClean <- newIORef []
  refDirsToClean <- newIORef Map.empty
  refFilesToNotIntermediateClean <- newIORef []
@@ -1117,6 +1148,7 @@ initDynFlags dflags = do
  refLlvmVersion <- newIORef 28
  wrapperNum <- newIORef 0
  return dflags{
+        canGenerateDynamicToo = refCanGenerateDynamicToo,
         filesToClean   = refFilesToClean,
         dirsToClean    = refDirsToClean,
         filesToNotIntermediateClean = refFilesToNotIntermediateClean,
@@ -1166,6 +1198,10 @@ defaultDynFlags mySettings =
         objectSuf               = phaseInputExt StopLn,
         hcSuf                   = phaseInputExt HCc,
         hiSuf                   = "hi",
+
+        canGenerateDynamicToo   = panic "defaultDynFlags: No canGenerateDynamicToo",
+        dynObjectSuf            = "dyn_" ++ phaseInputExt StopLn,
+        dynHiSuf                = "dyn_hi",
 
         pluginModNames          = [],
         pluginModNameOpts       = [],
@@ -1535,6 +1571,7 @@ getVerbFlags dflags
   | otherwise             = []
 
 setObjectDir, setHiDir, setStubDir, setDumpDir, setOutputDir,
+         setDynObjectSuf, setDynHiSuf,
          setDylibInstallName,
          setObjectSuf, setHiSuf, setHcSuf, parseDynLibLoaderMode,
          setPgmP, addOptl, addOptc, addOptP,
@@ -1554,9 +1591,11 @@ setDumpDir    f d = d{ dumpDir    = Just f}
 setOutputDir  f = setObjectDir f . setHiDir f . setStubDir f . setDumpDir f
 setDylibInstallName  f d = d{ dylibInstallName = Just f}
 
-setObjectSuf  f d = d{ objectSuf  = f}
-setHiSuf      f d = d{ hiSuf      = f}
-setHcSuf      f d = d{ hcSuf      = f}
+setObjectSuf    f d = d{ objectSuf    = f}
+setDynObjectSuf f d = d{ dynObjectSuf = f}
+setHiSuf        f d = d{ hiSuf        = f}
+setDynHiSuf     f d = d{ dynHiSuf     = f}
+setHcSuf        f d = d{ hcSuf        = f}
 
 setOutputFile f d = d{ outputFile = f}
 setOutputHi   f d = d{ outputHi   = f}
@@ -1734,14 +1773,8 @@ parseDynamicFlagsFull activeFlags cmdline dflags0 args = do
 
   -- check for disabled flags in safe haskell
   let (dflags2, sh_warns) = safeFlagCheck cmdline dflags1
-
-      theWays = sort $ nub $ ways dflags2
-      theBuildTag = mkBuildTag (filter (not . wayRTSOnly) theWays)
-      dflags3 = dflags2 {
-                    ways        = theWays,
-                    buildTag    = theBuildTag,
-                    rtsBuildTag = mkBuildTag theWays
-                }
+      dflags3 = updateWays dflags2
+      theWays = ways dflags3
 
   unless (allowed_combination theWays) $
       throwGhcException (CmdLineError ("combination not supported: "  ++
@@ -1753,6 +1786,15 @@ parseDynamicFlagsFull activeFlags cmdline dflags0 args = do
 
   return (dflags4, leftover, consistency_warnings ++ sh_warns ++ warns)
 
+updateWays :: DynFlags -> DynFlags
+updateWays dflags
+    = let theWays = sort $ nub $ ways dflags
+          theBuildTag = mkBuildTag (filter (not . wayRTSOnly) theWays)
+      in dflags {
+             ways        = theWays,
+             buildTag    = theBuildTag,
+             rtsBuildTag = mkBuildTag theWays
+         }
 
 -- | Check (and potentially disable) any extensions that aren't allowed
 -- in safe mode.
@@ -1936,14 +1978,18 @@ dynamic_flags = [
   , Flag "o"                 (sepArg (setOutputFile . Just))
   , Flag "ohi"               (hasArg (setOutputHi . Just ))
   , Flag "osuf"              (hasArg setObjectSuf)
+  , Flag "dynosuf"           (hasArg setDynObjectSuf)
   , Flag "hcsuf"             (hasArg setHcSuf)
   , Flag "hisuf"             (hasArg setHiSuf)
+  , Flag "dynhisuf"          (hasArg setDynHiSuf)
   , Flag "hidir"             (hasArg setHiDir)
   , Flag "tmpdir"            (hasArg setTmpDir)
   , Flag "stubdir"           (hasArg setStubDir)
   , Flag "dumpdir"           (hasArg setDumpDir)
   , Flag "outputdir"         (hasArg setOutputDir)
   , Flag "ddump-file-prefix" (hasArg (setDumpPrefixForce . Just))
+
+  , Flag "dynamic-too"       (NoArg (setGeneralFlag Opt_BuildDynamicToo))
 
         ------- Keeping temporary files -------------------------------------
      -- These can be singular (think ghc -c) or plural (think ghc --make)
@@ -2343,6 +2389,7 @@ fFlags = [
   ( "do-eta-reduction",                 Opt_DoEtaReduction, nop ),
   ( "case-merge",                       Opt_CaseMerge, nop ),
   ( "unbox-strict-fields",              Opt_UnboxStrictFields, nop ),
+  ( "unbox-strict-primitive-fields",    Opt_UnboxStrictPrimitiveFields, nop ),
   ( "dicts-cheap",                      Opt_DictsCheap, nop ),
   ( "excess-precision",                 Opt_ExcessPrecision, nop ),
   ( "eager-blackholing",                Opt_EagerBlackHoling, nop ),
@@ -2848,11 +2895,14 @@ setDumpFlag dump_flag = NoArg (setDumpFlag' dump_flag)
 
 --------------------------
 addWay :: Way -> DynP ()
-addWay w = do upd (\dfs -> dfs { ways = w : ways dfs })
-              dfs <- liftEwM getCmdLineState
-              let platform = targetPlatform dfs
-              wayExtras platform w
-              mapM_ setGeneralFlag $ wayGeneralFlags platform w
+addWay w = upd (addWay' w)
+
+addWay' :: Way -> DynFlags -> DynFlags
+addWay' w dflags0 = let platform = targetPlatform dflags0
+                        dflags1 = dflags0 { ways = w : ways dflags0 }
+                        dflags2 = wayExtras platform w dflags1
+                        dflags3 = foldr setGeneralFlag' dflags2 (wayGeneralFlags platform w)
+                    in dflags3
 
 removeWay :: Way -> DynP ()
 removeWay w = do
@@ -2866,8 +2916,13 @@ removeWay w = do
 
 --------------------------
 setGeneralFlag, unSetGeneralFlag :: GeneralFlag -> DynP ()
-setGeneralFlag   f = upd (\dfs -> gopt_set dfs f)
-unSetGeneralFlag f = upd (\dfs -> gopt_unset dfs f)
+setGeneralFlag   f = upd (setGeneralFlag' f)
+unSetGeneralFlag f = upd (unSetGeneralFlag' f)
+
+setGeneralFlag' :: GeneralFlag -> DynFlags -> DynFlags
+setGeneralFlag' f dflags = gopt_set dflags f
+unSetGeneralFlag' :: GeneralFlag -> DynFlags -> DynFlags
+unSetGeneralFlag' f dflags = gopt_unset dflags f
 
 --------------------------
 setWarningFlag, unSetWarningFlag :: WarningFlag -> DynP ()
@@ -2876,17 +2931,20 @@ unSetWarningFlag f = upd (\dfs -> wopt_unset dfs f)
 
 --------------------------
 setExtensionFlag, unSetExtensionFlag :: ExtensionFlag -> DynP ()
-setExtensionFlag f = do upd (\dfs -> xopt_set dfs f)
-                        sequence_ deps
+setExtensionFlag f = upd (setExtensionFlag' f)
+unSetExtensionFlag f = upd (unSetExtensionFlag' f)
+
+setExtensionFlag', unSetExtensionFlag' :: ExtensionFlag -> DynFlags -> DynFlags
+setExtensionFlag' f dflags = foldr ($) (xopt_set dflags f) deps
   where
-    deps = [ if turn_on then setExtensionFlag   d
-                        else unSetExtensionFlag d
+    deps = [ if turn_on then setExtensionFlag'   d
+                        else unSetExtensionFlag' d
            | (f', turn_on, d) <- impliedFlags, f' == f ]
         -- When you set f, set the ones it implies
         -- NB: use setExtensionFlag recursively, in case the implied flags
         --     implies further flags
 
-unSetExtensionFlag f = upd (\dfs -> xopt_unset dfs f)
+unSetExtensionFlag' f dflags = xopt_unset dflags f
    -- When you un-set f, however, we don't un-set the things it implies
    --      (except for -fno-glasgow-exts, which is treated specially)
 
@@ -2956,8 +3014,7 @@ clearPkgConf = upd $ \s -> s { extraPkgConfs = const [] }
 
 exposePackage, exposePackageId, hidePackage, ignorePackage,
         trustPackage, distrustPackage :: String -> DynP ()
-exposePackage p =
-  upd (\s -> s{ packageFlags = ExposePackage p : packageFlags s })
+exposePackage p = upd (exposePackage' p)
 exposePackageId p =
   upd (\s -> s{ packageFlags = ExposePackageId p : packageFlags s })
 hidePackage p =
@@ -2968,6 +3025,10 @@ trustPackage p = exposePackage p >> -- both trust and distrust also expose a pac
   upd (\s -> s{ packageFlags = TrustPackage p : packageFlags s })
 distrustPackage p = exposePackage p >>
   upd (\s -> s{ packageFlags = DistrustPackage p : packageFlags s })
+
+exposePackage' :: String -> DynFlags -> DynFlags
+exposePackage' p dflags
+    = dflags { packageFlags = ExposePackage p : packageFlags dflags }
 
 setPackageName :: String -> DynFlags -> DynFlags
 setPackageName p s =  s{ thisPackage = stringToPackageId p }

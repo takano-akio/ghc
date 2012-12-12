@@ -181,6 +181,8 @@ data Env gbl lcl
 
 instance ContainsDynFlags (Env gbl lcl) where
     extractDynFlags env = hsc_dflags (env_top env)
+    replaceDynFlags env dflags
+        = env {env_top = replaceDynFlags (env_top env) dflags}
 
 instance ContainsModule gbl => ContainsModule (Env gbl lcl) where
     extractModule env = extractModule (env_gbl env)
@@ -836,11 +838,14 @@ The @WhereFrom@ type controls where the renamer looks for an interface file
 data WhereFrom
   = ImportByUser IsBootInterface        -- Ordinary user import (perhaps {-# SOURCE #-})
   | ImportBySystem                      -- Non user import.
+  | ImportByPlugin                      -- Importing a plugin; 
+                                        -- See Note [Care with plugin imports] in LoadIface
 
 instance Outputable WhereFrom where
   ppr (ImportByUser is_boot) | is_boot     = ptext (sLit "{- SOURCE -}")
                              | otherwise   = empty
   ppr ImportBySystem                       = ptext (sLit "{- SYSTEM -}")
+  ppr ImportByPlugin                       = ptext (sLit "{- PLUGIN -}")
 \end{code}
 
 %************************************************************************
