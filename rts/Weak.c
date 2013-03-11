@@ -16,11 +16,6 @@
 #include "Prelude.h"
 #include "Trace.h"
 
-// ForeignPtrs with C finalizers rely on weak pointers inside weak_ptr_list
-// to always be in the same order.
-
-StgWeak *weak_ptr_list;
-
 void
 runCFinalizer(void *fn, void *ptr, void *env, StgWord flag)
 {

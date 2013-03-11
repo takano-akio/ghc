@@ -83,6 +83,10 @@ typedef struct generation_ {
 
     StgTSO *       threads;             // threads in this gen
                                         // linked via global_link
+    StgWeak *      weak_ptr_list;       // weak pointers in this gen
+        // ForeignPtrs with C finalizers rely on weak pointers inside weak_ptr_list
+        // to always be in the same order.
+
     struct generation_ *to;		// destination gen for live objects
 
     // stats information
@@ -116,6 +120,8 @@ typedef struct generation_ {
     bdescr *     bitmap;  		// bitmap for compacting collection
 
     StgTSO *     old_threads;
+    StgWeak *    old_weak_ptr_list;
+    StgWeak *    weak_ptr_list_tail;
 } generation;
 
 extern generation * generations;
