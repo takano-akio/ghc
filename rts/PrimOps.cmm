@@ -374,14 +374,10 @@ stg_mkWeakzh ( gcptr key,
   w = Hp - SIZEOF_StgWeak + WDS(1);
   SET_HDR(w, stg_WEAK_info, CCCS);
 
-  // We don't care about cfinalizer here.
-  // Should StgWeak_cfinalizer(w) be stg_NO_FINALIZER_closure or
-  // something else?
-
-  StgWeak_key(w)        = key;
-  StgWeak_value(w)      = value;
-  StgWeak_finalizer(w)  = finalizer;
-  StgWeak_cfinalizer(w) = stg_NO_FINALIZER_closure;
+  StgWeak_key(w)         = key;
+  StgWeak_value(w)       = value;
+  StgWeak_finalizer(w)   = finalizer;
+  StgWeak_cfinalizers(w) = stg_NO_FINALIZER_closure;
 
   ACQUIRE_LOCK(sm_mutex);
   StgWeak_link(w)	= W_[weak_ptr_list];
@@ -398,55 +394,51 @@ stg_mkWeakNoFinalizzerzh ( gcptr key, gcptr value )
   jump stg_mkWeakzh (key, value, stg_NO_FINALIZER_closure);
 }
 
-stg_mkWeakForeignEnvzh ( gcptr key,
-                         gcptr val,
-                         W_ fptr,   // finalizer
-                         W_ ptr,
-                         W_ flag,   // has environment (0 or 1)
-                         W_ eptr )
+STRING(stg_cfinalizer_msg,"Adding a finalizer to %p\n")
+
+stg_addCFinalizzerToWeakzh ( W_ fptr,   // finalizer
+                             W_ ptr,
+                             W_ flag,   // has environment (0 or 1)
+                             W_ eptr,
+                             gcptr w )
 {
-  W_ payload_words, words;
-  gcptr w, p;
+  W_ c;
+#if defined(THREADED_RTS)
+  W_ old, r;
+#endif
 
-  ALLOC_PRIM (SIZEOF_StgWeak);
+  ALLOC_PRIM (SIZEOF_StgCFinalizerList)
 
-  w = Hp - SIZEOF_StgWeak + WDS(1);
-  SET_HDR(w, stg_WEAK_info, CCCS);
+  c = Hp - SIZEOF_StgCFinalizerList + WDS(1);
+  SET_HDR(c, stg_C_FINALIZER_LIST_info, CCCS);
 
-  payload_words = 4;
-  words         = BYTES_TO_WDS(SIZEOF_StgArrWords) + payload_words;
-  ("ptr" p)     = ccall allocate(MyCapability() "ptr", words);
+  StgCFinalizerList_fptr(c) = fptr;
+  StgCFinalizerList_ptr(c) = ptr;
+  StgCFinalizerList_eptr(c) = eptr;
+  StgCFinalizerList_flag(c) = flag;
 
-  TICK_ALLOC_PRIM(SIZEOF_StgArrWords,WDS(payload_words),0);
-  SET_HDR(p, stg_ARR_WORDS_info, CCCS);
+#if defined(THREADED_RTS)
+  old = StgWeak_cfinalizers(w);
+retry:
+  StgCFinalizerList_link(c) = old;
+  r = old;
+  (old) = ccall cas(w + SIZEOF_StgHeader + OFFSET_StgWeak_cfinalizers, old, c);
+  if (r != old) { goto retry; }
+#else
+  StgCFinalizerList_link(c) = StgWeak_cfinalizers(w);
+  StgWeak_cfinalizers(w) = c;
+#endif
 
-  StgArrWords_bytes(p)     = WDS(payload_words);
-  StgArrWords_payload(p,0) = fptr;
-  StgArrWords_payload(p,1) = ptr;
-  StgArrWords_payload(p,2) = eptr;
-  StgArrWords_payload(p,3) = flag;
+  recordMutable(w);
 
-  // We don't care about the value here.
-  // Should StgWeak_value(w) be stg_NO_FINALIZER_closure or something else?
+  IF_DEBUG(weak, ccall debugBelch(stg_cfinalizer_msg,w));
 
-  StgWeak_key(w)        = key;
-  StgWeak_value(w)      = val;
-  StgWeak_finalizer(w)  = stg_NO_FINALIZER_closure;
-  StgWeak_cfinalizer(w) = p;
-
-  ACQUIRE_LOCK(sm_mutex);
-  StgWeak_link(w)   = W_[weak_ptr_list];
-  W_[weak_ptr_list] = w;
-  RELEASE_LOCK(sm_mutex);
-
-  IF_DEBUG(weak, ccall debugBelch(stg_weak_msg,w));
-
-  return (w);
+  return ();
 }
 
 stg_finalizzeWeakzh ( gcptr w )
 {
-  gcptr f, arr;
+  gcptr f, list;
 
   // already dead?
   if (GET_INFO(w) == stg_DEAD_WEAK_info) {
@@ -472,16 +464,11 @@ stg_finalizzeWeakzh ( gcptr w )
   SET_INFO(w,stg_DEAD_WEAK_info);
   LDV_RECORD_CREATE(w);
 
-  f   = StgWeak_finalizer(w);
-  arr = StgWeak_cfinalizer(w);
+  f    = StgWeak_finalizer(w);
+  list = StgWeak_cfinalizers(w);
 
-  StgDeadWeak_link(w) = StgWeak_link(w);
-
-  if (arr != stg_NO_FINALIZER_closure) {
-    ccall runCFinalizer(StgArrWords_payload(arr,0),
-                              StgArrWords_payload(arr,1),
-                              StgArrWords_payload(arr,2),
-                              StgArrWords_payload(arr,3));
+  if (list != stg_NO_FINALIZER_closure) {
+    ccall runCFinalizers(list);
   }
 
   /* return the finalizer */

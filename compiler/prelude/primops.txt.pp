@@ -1871,8 +1871,9 @@ primop  MkWeakNoFinalizerOp "mkWeakNoFinalizer#" GenPrimOp
    has_side_effects = True
    out_of_line      = True
 
-primop  MkWeakForeignEnvOp "mkWeakForeignEnv#" GenPrimOp
-   o -> b -> Addr# -> Addr# -> Int# -> Addr# -> State# RealWorld -> (# State# RealWorld, Weak# b #)
+primop  AddCFinalizerToWeakOp "addCFinalizerToWeak#" GenPrimOp
+   Addr# -> Addr# -> Int# -> Addr# -> Weak# b
+          -> State# RealWorld -> State# RealWorld
    with
    has_side_effects = True
    out_of_line      = True
