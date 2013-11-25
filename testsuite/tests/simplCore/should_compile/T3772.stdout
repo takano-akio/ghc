@@ -48,7 +48,7 @@ T3772.$trModule2 = GHC.Types.TrNameS "main"#
 T3772.$trModule :: GHC.Types.Module
 [GblId,
  Caf=NoCafRefs,
- Str=tm,
+ Str=tm(tm1,tm1),
  Unf=Unf{Src=<vanilla>, TopLvl=True, Value=True, ConLike=True,
          WorkFree=True, Expandable=True, Guidance=IF_ARGS [] 10 30}]
 T3772.$trModule =

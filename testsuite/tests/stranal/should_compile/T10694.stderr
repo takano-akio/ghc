@@ -4,7 +4,7 @@ Result size of Tidy Core = {terms: 59, types: 41, coercions: 0}
 
 -- RHS size: {terms: 39, types: 23, coercions: 0}
 pm [InlPrag=NOINLINE] :: Int -> Int -> (Int, Int)
-[GblId, Arity=2, Str=<L,U(U)><L,U(U)>tm]
+[GblId, Arity=2, Str=<L,U(U)><L,U(U)>tm(,)]
 pm =
   \ (x_axW :: Int) (y_axX :: Int) ->
     let {
@@ -58,7 +58,7 @@ T10694.$trModule1 = GHC.Types.TrNameS "T10694"#
 T10694.$trModule :: GHC.Types.Module
 [GblId,
  Caf=NoCafRefs,
- Str=tm,
+ Str=tm(tm1,tm1),
  Unf=Unf{Src=<vanilla>, TopLvl=True, Value=True, ConLike=True, WorkFree=True, Expandable=True, Guidance=IF_ARGS [] 10 30}]
 T10694.$trModule = GHC.Types.Module T10694.$trModule2 T10694.$trModule1
 

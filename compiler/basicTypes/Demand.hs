@@ -30,7 +30,7 @@ module Demand (
         peelFV, findIdDemand,
 
         DmdResult, CPRResult,
-        isBotRes, isTopRes,
+        isBotRes, isTopRes, getDmdResult,
         topRes, convRes, botRes, exnRes, cprProdRes,
         vanillaCprProdRes, cprSumRes,
         appIsBottom, isBottomingSig, pprIfaceStrictSig,
@@ -45,11 +45,11 @@ module Demand (
         seqDemand, seqDemandList, seqDmdType, seqStrictSig,
 
         evalDmd, cleanEvalDmd, cleanEvalProdDmd, isStrictDmd,
-        splitDmdTy, splitFVs,
+        splitDmdTy, splitFVs, splitProdCleanDmd,
         deferAfterIO,
         postProcessUnsat, postProcessDmdType,
 
-        splitProdDmd_maybe, peelCallDmd, mkCallDmd, mkWorkerDemand,
+        splitProdDmd_maybe, peelCallDmd, mkCallDmd, mkCallDmdN, mkWorkerDemand,
         dmdTransformSig, dmdTransformDataConSig, dmdTransformDictSelSig,
         argOneShots, argsOneShots, saturatedByOneShots,
         trimToType, TypeShape(..),
@@ -210,6 +210,10 @@ mkSCall :: StrDmd -> StrDmd
 mkSCall HyperStr = HyperStr
 mkSCall s        = SCall s
 
+mkSCallN :: Arity -> StrDmd -> StrDmd
+mkSCallN _ HyperStr = HyperStr
+mkSCallN n s        = nTimes n SCall s
+
 mkSProd :: [ArgStr] -> StrDmd
 mkSProd sx
   | any isHyperStr sx = HyperStr
@@ -279,7 +283,7 @@ bothStr (SCall _)  (SProd _)   = HyperStr  -- Weird
 bothStr (SProd _)  HyperStr    = HyperStr
 bothStr (SProd s1) HeadStr     = SProd s1
 bothStr (SProd s1) (SProd s2)
-    | length s1 == length s2   = mkSProd (zipWith bothArgStr s1 s2)
+    | s1 `equalLength` s2      = mkSProd (zipWith bothArgStr s1 s2)
     | otherwise                = HyperStr  -- Weird
 bothStr (SProd _) (SCall _)    = HyperStr
 
@@ -289,9 +293,12 @@ seqStrDmd (SProd ds)   = seqStrDmdList ds
 seqStrDmd (SCall s)     = s `seq` ()
 seqStrDmd _            = ()
 
+seqListWith :: (a -> ()) -> [a] -> ()
+seqListWith _ [] = ()
+seqListWith s (x:xs) = s x `seq` seqListWith s xs
+
 seqStrDmdList :: [ArgStr] -> ()
-seqStrDmdList [] = ()
-seqStrDmdList (d:ds) = seqArgStr d `seq` seqStrDmdList ds
+seqStrDmdList = seqListWith seqArgStr
 
 seqArgStr :: ArgStr -> ()
 seqArgStr Lazy      = ()
@@ -387,7 +394,11 @@ useTop     = Use Many Used
 
 mkUCall :: Count -> UseDmd -> UseDmd
 --mkUCall c Used = Used c
-mkUCall c a  = UCall c a
+mkUCall c u  = UCall c u
+
+mkUCallN :: Arity -> Count -> UseDmd -> UseDmd
+--mkUCall c Used = Used c
+mkUCallN n c u  = nTimes n (UCall c) u
 
 mkUProd :: [ArgUse] -> UseDmd
 mkUProd ux
@@ -411,7 +422,7 @@ lubUse (UCall c1 u1) (UCall c2 u2) = UCall (lubCount c1 c2) (lubUse u1 u2)
 lubUse (UCall _ _) _               = Used
 lubUse (UProd ux) UHead            = UProd ux
 lubUse (UProd ux1) (UProd ux2)
-     | length ux1 == length ux2    = UProd $ zipWith lubArgUse ux1 ux2
+     | ux1 `equalLength` ux2       = UProd $ zipWith lubArgUse ux1 ux2
      | otherwise                   = Used
 lubUse (UProd {}) (UCall {})       = Used
 -- lubUse (UProd {}) Used             = Used
@@ -441,7 +452,7 @@ bothUse (UCall _ u1) (UCall _ u2)   = UCall Many (u1 `lubUse` u2)
 bothUse (UCall {}) _                = Used
 bothUse (UProd ux) UHead            = UProd ux
 bothUse (UProd ux1) (UProd ux2)
-      | length ux1 == length ux2    = UProd $ zipWith bothArgUse ux1 ux2
+      | ux1 `equalLength` ux2       = UProd $ zipWith bothArgUse ux1 ux2
       | otherwise                   = Used
 bothUse (UProd {}) (UCall {})       = Used
 -- bothUse (UProd {}) Used             = Used  -- Note [Used should win]
@@ -576,8 +587,7 @@ seqUseDmd (UCall c d)  = c `seq` seqUseDmd d
 seqUseDmd _            = ()
 
 seqArgUseList :: [ArgUse] -> ()
-seqArgUseList []     = ()
-seqArgUseList (d:ds) = seqArgUse d `seq` seqArgUseList ds
+seqArgUseList = seqListWith seqArgUse
 
 seqArgUse :: ArgUse -> ()
 seqArgUse (Use c u)  = c `seq` seqUseDmd u
@@ -606,7 +616,7 @@ useCount _           = Many
 *                                                                      *
 ************************************************************************
 
-This domain differst from JointDemand in the sence that pure absence
+This domain differs from JointDemand in the sense that pure absence
 is taken away, i.e., we deal *only* with non-absent demands.
 
 Note [Strict demands]
@@ -654,6 +664,12 @@ mkOnceUsedDmd, mkManyUsedDmd :: CleanDemand -> Demand
 mkOnceUsedDmd (JD {sd = s,ud = a}) = JD { sd = Str VanStr s, ud = Use One a }
 mkManyUsedDmd (JD {sd = s,ud = a}) = JD { sd = Str VanStr s, ud = Use Many a }
 
+splitProdCleanDmd :: Arity -> CleanDemand -> Maybe [Demand]
+splitProdCleanDmd arity (JD {sd = s,ud = u}) = do
+  ss <- splitStrProdDmd arity s
+  us <- splitUseProdDmd arity u
+  return $ mkJointDmds ss us
+
 evalDmd :: Demand
 -- Evaluated strictly, and used arbitrarily deeply
 evalDmd = JD { sd = Str VanStr HeadStr, ud = useTop }
@@ -672,6 +688,10 @@ mkWorkerDemand :: Int -> Demand
 mkWorkerDemand n = JD { sd = Lazy, ud = Use One (go n) }
   where go 0 = Used
         go n = mkUCall One $ go (n-1)
+
+mkCallDmdN :: Arity -> CleanDemand -> CleanDemand
+mkCallDmdN n (JD {sd = d, ud = u})
+  = JD { sd = mkSCallN n d, ud = mkUCallN n One u }
 
 cleanEvalDmd :: CleanDemand
 cleanEvalDmd = JD { sd = HeadStr, ud = Used }
@@ -759,8 +779,7 @@ seqDemand :: Demand -> ()
 seqDemand (JD {sd = s, ud = u}) = seqArgStr s `seq` seqArgUse u
 
 seqDemandList :: [Demand] -> ()
-seqDemandList [] = ()
-seqDemandList (d:ds) = seqDemand d `seq` seqDemandList ds
+seqDemandList = seqListWith seqDemand
 
 isStrictDmd :: Demand -> Bool
 -- See Note [Strict demands]
@@ -895,7 +914,7 @@ DmdResult:     Dunno CPRResult
 
 CPRResult:         NoCPR
                    /    \
-            RetProd    RetSum ConTag
+  RetProd [DmdResult]    RetSum ConTag
 
 
 Product constructors return (Converges (RetProd rs))
@@ -916,16 +935,20 @@ data Termination r
 
 type DmdResult = Termination CPRResult
 
-data CPRResult = NoCPR          -- Top of the lattice
-               | RetProd        -- Returns a constructor from a product type
-               | RetSum ConTag  -- Returns a constructor from a data type
+data CPRResult = NoCPR               -- Top of the lattice
+               | RetProd [DmdResult] -- Returns a constructor from a product type
+               | RetSum ConTag       -- Returns a constructor from a data type
                deriving( Eq, Show )
 
 lubCPR :: CPRResult -> CPRResult -> CPRResult
 lubCPR (RetSum t1) (RetSum t2)
   | t1 == t2                       = RetSum t1
-lubCPR RetProd     RetProd     = RetProd
-lubCPR _ _                     = NoCPR
+lubCPR (RetProd ds1) (RetProd ds2)
+  | ds1 `equalLength` ds2          = RetProd (zipWith lubDmdResult ds1 ds2)
+    -- I'm thinking the could be unequal if two branches of a GADT case
+    -- returned a product constructor from a different data type
+    -- Also we use [] to mean [top,...,top]
+lubCPR _ _                         = NoCPR
 
 lubDmdResult :: DmdResult -> DmdResult -> DmdResult
 lubDmdResult Diverges       (Converges c2) = Dunno c2
@@ -965,7 +988,7 @@ instance Outputable r => Outputable (Termination r) where
 instance Outputable CPRResult where
   ppr NoCPR        = empty
   ppr (RetSum n)   = char 'm' <> int n
-  ppr RetProd      = char 'm'
+  ppr (RetProd rs) = char 'm' <> parens (hcat (punctuate (char ',') (map ppr rs)))
 
 seqDmdResult :: DmdResult -> ()
 seqDmdResult Diverges  = ()
@@ -976,7 +999,7 @@ seqDmdResult (Dunno c) = seqCPRResult c
 seqCPRResult :: CPRResult -> ()
 seqCPRResult NoCPR        = ()
 seqCPRResult (RetSum n)   = n `seq` ()
-seqCPRResult RetProd      = ()
+seqCPRResult (RetProd rs) = seqListWith seqDmdResult rs
 
 
 ------------------------------------------------------------------------
@@ -994,15 +1017,19 @@ botRes = Diverges
 cprSumRes :: ConTag -> DmdResult
 cprSumRes tag = Converges $ RetSum tag
 
-cprProdRes :: [DmdType] -> DmdResult
-cprProdRes _arg_tys = Converges $ RetProd
+cprProdRes :: [DmdResult] -> DmdResult
+cprProdRes arg_ress = Converges $ RetProd arg_ress
+
+getDmdResult :: DmdType -> DmdResult
+getDmdResult (DmdType _ [] r) = r       -- Only for data-typed arguments!
+getDmdResult _                = topRes
 
 -- Forget that something might converge for sure
 divergeDmdResult :: DmdResult -> DmdResult
 divergeDmdResult r = r `lubDmdResult` botRes
 
 vanillaCprProdRes :: Arity -> DmdResult
-vanillaCprProdRes _arity = Converges $ RetProd
+vanillaCprProdRes arity = Converges $ RetProd (replicate arity topRes)
 
 isTopRes :: DmdResult -> Bool
 isTopRes (Dunno NoCPR) = True
@@ -1025,8 +1052,8 @@ trimCPRInfo trim_all trim_sums res
 
     trimC (RetSum n)   | trim_all || trim_sums = NoCPR
                        | otherwise             = RetSum n
-    trimC RetProd      | trim_all  = NoCPR
-                       | otherwise = RetProd
+    trimC (RetProd rs) | trim_all  = NoCPR
+                       | otherwise = RetProd (map trimR rs)
     trimC NoCPR = NoCPR
 
 returnsCPR_maybe :: DmdResult -> Maybe ConTag
@@ -1037,7 +1064,7 @@ returnsCPR_maybe ThrowsExn     = Nothing
 
 retCPR_maybe :: CPRResult -> Maybe ConTag
 retCPR_maybe (RetSum t)  = Just t
-retCPR_maybe RetProd     = Just fIRST_TAG
+retCPR_maybe (RetProd _) = Just fIRST_TAG
 retCPR_maybe NoCPR       = Nothing
 
 -- See Notes [Default demand on free variables]
@@ -2201,12 +2228,12 @@ instance Binary DmdResult where
 
 instance Binary CPRResult where
     put_ bh (RetSum n)   = do { putByte bh 0; put_ bh n }
-    put_ bh RetProd      = putByte bh 1
+    put_ bh (RetProd rs) = do { putByte bh 1; put_ bh rs }
     put_ bh NoCPR        = putByte bh 2
 
     get  bh = do
             h <- getByte bh
-            case h of
-              0 -> do { n <- get bh; return (RetSum n) }
-              1 -> return RetProd
+            case h of 
+              0 -> do { n  <- get bh; return (RetSum n) }
+              1 -> do { rs <- get bh; return (RetProd rs) }
               _ -> return NoCPR

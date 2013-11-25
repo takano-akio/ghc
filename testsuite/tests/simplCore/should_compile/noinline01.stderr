@@ -18,7 +18,7 @@ Noinline01.$trModule1 :: GHC.Types.TrName
     NO_CCS GHC.Types.TrNameS! ["Noinline01"#];
 
 Noinline01.$trModule :: GHC.Types.Module
-[GblId, Caf=NoCafRefs, Str=tm, Unf=OtherCon []] =
+[GblId, Caf=NoCafRefs, Str=tm(tm1,tm1), Unf=OtherCon []] =
     NO_CCS GHC.Types.Module! [Noinline01.$trModule2
                               Noinline01.$trModule1];
 
@@ -43,7 +43,7 @@ Noinline01.$trModule1 :: GHC.Types.TrName
     NO_CCS GHC.Types.TrNameS! ["Noinline01"#];
 
 Noinline01.$trModule :: GHC.Types.Module
-[GblId, Caf=NoCafRefs, Str=tm, Unf=OtherCon []] =
+[GblId, Caf=NoCafRefs, Str=tm(tm1,tm1), Unf=OtherCon []] =
     NO_CCS GHC.Types.Module! [Noinline01.$trModule2
                               Noinline01.$trModule1];
 
