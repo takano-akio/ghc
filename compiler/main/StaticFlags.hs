@@ -27,6 +27,7 @@ module StaticFlags (
 
         -- optimisation opts
         opt_NoStateHack,
+        opt_NestedCprOff,
         opt_NoOptCoercion,
 
         -- For the parser
@@ -143,7 +144,8 @@ isStaticFlag f = f `elem` flagsStaticNames
 flagsStaticNames :: [String]
 flagsStaticNames = [
     "fno-state-hack",
-    "fno-opt-coercion"
+    "fno-opt-coercion",
+    "fnested-cpr-off"
     ]
 
 -- We specifically need to discard static flags for clients of the
@@ -198,6 +200,9 @@ opt_NoDebugOutput  = lookUp  (fsLit "-dno-debug-output")
 
 opt_NoStateHack    :: Bool
 opt_NoStateHack    = lookUp  (fsLit "-fno-state-hack")
+
+opt_NestedCprOff   :: Bool
+opt_NestedCprOff   = lookUp  (fsLit "-fnested-cpr-off")
 
 opt_NoOptCoercion  :: Bool
 opt_NoOptCoercion  = lookUp  (fsLit "-fno-opt-coercion")
