@@ -1018,7 +1018,7 @@ cprSumRes :: ConTag -> DmdResult
 cprSumRes tag = Converges $ RetSum tag
 
 cprProdRes :: [DmdResult] -> DmdResult
-cprProdRes arg_ress = Converges $ RetProd arg_ress
+cprProdRes arg_ress = Converges $ cutCPRResult maxCPRDepth $ RetProd arg_ress
 
 getDmdResult :: DmdType -> DmdResult
 getDmdResult (DmdType _ [] r) = r       -- Only for data-typed arguments!
@@ -1028,8 +1028,32 @@ getDmdResult _                = topRes
 divergeDmdResult :: DmdResult -> DmdResult
 divergeDmdResult r = r `lubDmdResult` botRes
 
+maxCPRDepth :: Int
+maxCPRDepth = 3
+
+-- With nested CPR, DmdResult can be arbitrarily deep; consider
+-- data Rec1 = Foo Rec2 Rec2
+-- data Rec2 = Bar Rec1 Rec1
+--
+-- x = Foo y y
+-- y = Bar x x
+--
+-- So we need to forget information at a certain depth. We do that at all points
+-- where we are constructing new RetProd constructors.
+cutDmdResult :: Int -> DmdResult -> DmdResult
+cutDmdResult 0 _ = topRes
+cutDmdResult _ Diverges = Diverges
+cutDmdResult _ ThrowsExn = ThrowsExn
+cutDmdResult n (Converges c) = Converges (cutCPRResult n c)
+cutDmdResult n (Dunno c) = Dunno (cutCPRResult n c)
+
+cutCPRResult :: Int -> CPRResult -> CPRResult
+cutCPRResult _ NoCPR = NoCPR
+cutCPRResult n (RetProd rs) = RetProd (map (cutDmdResult (n-1)) rs)
+cutCPRResult _ (RetSum tag) = RetSum tag
+
 vanillaCprProdRes :: Arity -> DmdResult
-vanillaCprProdRes arity = Converges $ RetProd (replicate arity topRes)
+vanillaCprProdRes arity = cprProdRes (replicate arity topRes)
 
 isTopRes :: DmdResult -> Bool
 isTopRes (Dunno NoCPR) = True
@@ -1305,10 +1329,11 @@ bothDmdType (DmdType fv1 ds1 r1) (fv2, t2)
 
 instance Outputable DmdType where
   ppr (DmdType fv ds res)
-    = hsep [hcat (map ppr ds) <> ppr res,
+    = hsep [hcat (map ppr ds) <> ppr_res,
             if null fv_elts then empty
             else braces (fsep (map pp_elt fv_elts))]
     where
+      ppr_res = if isTopRes res then empty else ppr res
       pp_elt (uniq, dmd) = ppr uniq <> text "->" <> ppr dmd
       fv_elts = nonDetUFMToList fv
         -- It's OK to use nonDetUFMToList here because we only do it for
