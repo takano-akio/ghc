@@ -494,10 +494,13 @@ mkDataConRep dflags fam_envs wrap_name mb_bangs data_con
                              -- does not tidy the IdInfo of implicit bindings (like the wrapper)
                              -- so it not make sure that the CAF info is sane
 
-             wrap_sig = mkClosedStrictSig wrap_arg_dmds (dataConCPR data_con)
+             wrap_sig_conv = mkClosedStrictSig wrap_arg_dmds (dataConCPR data_con)
+             wrap_sig | any isBanged arg_ibangs = sigMayDiverge wrap_sig_conv
+                      | otherwise               = wrap_sig_conv
+
              wrap_arg_dmds = map mk_dmd arg_ibangs
              mk_dmd str | isBanged str = evalDmd
-                        | otherwise           = topDmd
+                        | otherwise    = topDmd
                  -- The Cpr info can be important inside INLINE rhss, where the
                  -- wrapper constructor isn't inlined.
                  -- And the argument strictness can be important too; we
