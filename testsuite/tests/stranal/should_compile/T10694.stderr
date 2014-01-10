@@ -42,7 +42,7 @@ m = \ (x_aCY :: Int) (y_aCZ :: Int) -> case pm x_aCY y_aCZ of { (pr_aD0, mr_aD1)
 T10694.$trModule2 :: GHC.Types.TrName
 [GblId,
  Caf=NoCafRefs,
- Str=m1,
+ Str=tm1,
  Unf=Unf{Src=<vanilla>, TopLvl=True, Value=True, ConLike=True, WorkFree=True, Expandable=True, Guidance=IF_ARGS [] 30 20}]
 T10694.$trModule2 = GHC.Types.TrNameS "main"#
 
@@ -50,7 +50,7 @@ T10694.$trModule2 = GHC.Types.TrNameS "main"#
 T10694.$trModule1 :: GHC.Types.TrName
 [GblId,
  Caf=NoCafRefs,
- Str=m1,
+ Str=tm1,
  Unf=Unf{Src=<vanilla>, TopLvl=True, Value=True, ConLike=True, WorkFree=True, Expandable=True, Guidance=IF_ARGS [] 40 20}]
 T10694.$trModule1 = GHC.Types.TrNameS "T10694"#
 

@@ -15,12 +15,12 @@ end Rec }
 
 -- RHS size: {terms: 2, types: 0, coercions: 0}
 Par01.$trModule2 :: GHC.Types.TrName
-[GblId, Caf=NoCafRefs, Str=m1, Unf=OtherCon []]
+[GblId, Caf=NoCafRefs, Str=tm1, Unf=OtherCon []]
 Par01.$trModule2 = GHC.Types.TrNameS "main"#
 
 -- RHS size: {terms: 2, types: 0, coercions: 0}
 Par01.$trModule1 :: GHC.Types.TrName
-[GblId, Caf=NoCafRefs, Str=m1, Unf=OtherCon []]
+[GblId, Caf=NoCafRefs, Str=tm1, Unf=OtherCon []]
 Par01.$trModule1 = GHC.Types.TrNameS "Par01"#
 
 -- RHS size: {terms: 3, types: 0, coercions: 0}

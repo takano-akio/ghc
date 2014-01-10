@@ -10,11 +10,11 @@ Noinline01.g :: GHC.Types.Bool
     \u [] Noinline01.f GHC.Types.False;
 
 Noinline01.$trModule2 :: GHC.Types.TrName
-[GblId, Caf=NoCafRefs, Str=m1, Unf=OtherCon []] =
+[GblId, Caf=NoCafRefs, Str=tm1, Unf=OtherCon []] =
     NO_CCS GHC.Types.TrNameS! ["main"#];
 
 Noinline01.$trModule1 :: GHC.Types.TrName
-[GblId, Caf=NoCafRefs, Str=m1, Unf=OtherCon []] =
+[GblId, Caf=NoCafRefs, Str=tm1, Unf=OtherCon []] =
     NO_CCS GHC.Types.TrNameS! ["Noinline01"#];
 
 Noinline01.$trModule :: GHC.Types.Module
@@ -35,11 +35,11 @@ Noinline01.g :: GHC.Types.Bool
     \u [] Noinline01.f GHC.Types.False;
 
 Noinline01.$trModule2 :: GHC.Types.TrName
-[GblId, Caf=NoCafRefs, Str=m1, Unf=OtherCon []] =
+[GblId, Caf=NoCafRefs, Str=tm1, Unf=OtherCon []] =
     NO_CCS GHC.Types.TrNameS! ["main"#];
 
 Noinline01.$trModule1 :: GHC.Types.TrName
-[GblId, Caf=NoCafRefs, Str=m1, Unf=OtherCon []] =
+[GblId, Caf=NoCafRefs, Str=tm1, Unf=OtherCon []] =
     NO_CCS GHC.Types.TrNameS! ["Noinline01"#];
 
 Noinline01.$trModule :: GHC.Types.Module

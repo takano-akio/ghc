@@ -6,7 +6,7 @@ Result size of Tidy Core = {terms: 172, types: 65, coercions: 0}
 Roman.$trModule2 :: GHC.Types.TrName
 [GblId,
  Caf=NoCafRefs,
- Str=m1,
+ Str=tm1,
  Unf=Unf{Src=<vanilla>, TopLvl=True, Value=True, ConLike=True,
          WorkFree=True, Expandable=True, Guidance=IF_ARGS [] 30 20}]
 Roman.$trModule2 = GHC.Types.TrNameS "main"#
@@ -15,7 +15,7 @@ Roman.$trModule2 = GHC.Types.TrNameS "main"#
 Roman.$trModule1 :: GHC.Types.TrName
 [GblId,
  Caf=NoCafRefs,
- Str=m1,
+ Str=tm1,
  Unf=Unf{Src=<vanilla>, TopLvl=True, Value=True, ConLike=True,
          WorkFree=True, Expandable=True, Guidance=IF_ARGS [] 40 20}]
 Roman.$trModule1 = GHC.Types.TrNameS "Roman"#
@@ -132,7 +132,7 @@ Roman.foo_go =
 Roman.foo2 :: Int
 [GblId,
  Caf=NoCafRefs,
- Str=m,
+ Str=tm,
  Unf=Unf{Src=<vanilla>, TopLvl=True, Value=True, ConLike=True,
          WorkFree=True, Expandable=True, Guidance=IF_ARGS [] 10 20}]
 Roman.foo2 = GHC.Types.I# 6#

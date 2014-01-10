@@ -6,7 +6,7 @@ Result size of Tidy Core = {terms: 45, types: 17, coercions: 0}
 T4930.$trModule2 :: GHC.Types.TrName
 [GblId,
  Caf=NoCafRefs,
- Str=m1,
+ Str=tm1,
  Unf=Unf{Src=<vanilla>, TopLvl=True, Value=True, ConLike=True,
          WorkFree=True, Expandable=True, Guidance=IF_ARGS [] 30 20}]
 T4930.$trModule2 = GHC.Types.TrNameS "main"#
@@ -15,7 +15,7 @@ T4930.$trModule2 = GHC.Types.TrNameS "main"#
 T4930.$trModule1 :: GHC.Types.TrName
 [GblId,
  Caf=NoCafRefs,
- Str=m1,
+ Str=tm1,
  Unf=Unf{Src=<vanilla>, TopLvl=True, Value=True, ConLike=True,
          WorkFree=True, Expandable=True, Guidance=IF_ARGS [] 40 20}]
 T4930.$trModule1 = GHC.Types.TrNameS "T4930"#
