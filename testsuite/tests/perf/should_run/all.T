@@ -2,7 +2,9 @@
 
 test('T10359',
      [stats_num_field('bytes allocated',
-          [(wordsize(64), 499512, 5),
+          [(wordsize(64), 450960, 5),
+              # prev:        499512
+              # 2016-09-19:  450960 (nested CPR)
            (wordsize(32), 351508, 5)]),
       only_ways(['normal'])
       ],
