@@ -622,8 +622,8 @@ environment, which effectively assigns them 'nopSig' (see "getStrictness")
 dmdAnalTrivialRhs ::
     AnalEnv -> Id -> CoreExpr -> Var ->
     (DmdEnv, Id, CoreExpr)
-dmdAnalTrivialRhs env id rhs fn
-  = (fn_fv, set_idStrictness env id fn_str, rhs)
+dmdAnalTrivialRhs env var rhs fn
+  = (fn_fv, set_idStrictness env var fn_str, rhs)
   where
     fn_str = getStrictness env fn
     fn_fv | isLocalId fn = unitVarEnv fn topDmd
@@ -654,22 +654,26 @@ dmdAnalRhsLetDown :: TopLevelFlag
            -> (DmdEnv, Id, CoreExpr)
 -- Process the RHS of the binding, add the strictness signature
 -- to the Id, and augment the environment with the signature as well.
-dmdAnalRhsLetDown top_lvl rec_flag env id rhs
+dmdAnalRhsLetDown top_lvl rec_flag env var rhs
   | Just fn <- unpackTrivial rhs   -- See Note [Demand analysis for trivial right-hand sides]
-  = dmdAnalTrivialRhs env id rhs fn
+  = dmdAnalTrivialRhs env var rhs fn
 
   | otherwise
-  = (lazy_fv, id', mkLams bndrs' body')
+  = (lazy_fv, var', mkLams bndrs' body')
   where
-    (bndrs, body)    = collectBinders rhs
-    env_body         = foldl extendSigsWithLam env bndrs
-    (body_ty, body') = dmdAnal env_body body_dmd body
-    body_ty'         = removeDmdTyArgs body_ty -- zap possible deep CPR info
+    (bndrs, body)        = collectBinders rhs
+    env_body             = foldl extendSigsWithLam env bndrs
+    (body_ty, body')     = dmdAnal env_body body_dmd body
+    body_ty'             = removeDmdTyArgs body_ty -- zap possible deep CPR info
     (DmdType rhs_fv rhs_dmds rhs_res, bndrs')
-                     = annotateLamBndrs env (isDFunId id) body_ty' bndrs
-    sig_ty           = mkStrictSig (mkDmdType sig_fv rhs_dmds rhs_res')
-    id'              = set_idStrictness env id sig_ty
-        -- See Note [NOINLINE and strictness]
+                         = annotateLamBndrs env (isDFunId var) body_ty' bndrs
+    sig_ty               = mkStrictSig $
+                           mkDmdType sig_fv rhs_dmds $
+                                handle_sum_cpr $
+                                handle_thunk_cpr $
+                                rhs_res
+    var'                 = set_idStrictness env var sig_ty
+      -- See Note [NOINLINE and strictness]
 
     -- See Note [Product demands for function body]
     body_dmd = case deepSplitProductType_maybe (ae_fam_envs env) (exprType body) of
@@ -684,16 +688,19 @@ dmdAnalRhsLetDown top_lvl rec_flag env id rhs
     -- See Note [Lazy and unleashable free variables]
     (lazy_fv, sig_fv) = splitFVs is_thunk rhs_fv1
 
-    rhs_res'  = trimCPRInfo trim_all trim_sums rhs_res
-    trim_all  = is_thunk && not_strict
-    trim_sums = not (isTopLevel top_lvl) -- See Note [CPR for sum types]
+    -- Note [CPR for sum types]
+    handle_sum_cpr | isTopLevel top_lvl = id
+                   | otherwise          = forgetSumCPR
 
     -- See Note [CPR for thunks]
+    handle_thunk_cpr | is_thunk && not_strict = forgetCPR
+                     | otherwise              = id
+
     is_thunk = not (exprIsHNF rhs)
     not_strict
        =  isTopLevel top_lvl  -- Top level and recursive things don't
        || isJust rec_flag     -- get their demandInfo set at all
-       || not (isStrictDmd (idDemandInfo id) || ae_virgin env)
+       || not (isStrictDmd (idDemandInfo var) || ae_virgin env)
           -- See Note [Optimistic CPR in the "virgin" case]
 
 unpackTrivial :: CoreExpr -> Maybe Id
@@ -890,6 +897,9 @@ However this means in turn that the *enclosing* function
 may be CPR'd (via the returned Justs).  But in the case of
 sums, there may be Nothing alternatives; and that messes
 up the sum-type CPR.
+
+This also applies to nested CPR information: Keep product CPR information, but
+zap sum CPR information therein.
 
 Conclusion: only do this for products.  It's still not
 guaranteed OK for products, but sums definitely lose sometimes.

@@ -34,7 +34,8 @@ module Demand (
         topRes, convRes, botRes, exnRes, cprProdRes,
         vanillaCprProdRes, cprSumRes,
         appIsBottom, isBottomingSig, pprIfaceStrictSig,
-        trimCPRInfo, returnsCPR_maybe,
+        returnsCPR_maybe,
+        forgetCPR, forgetSumCPR,
         StrictSig(..), mkStrictSig, mkClosedStrictSig,
         nopSig, botSig, exnSig, cprProdSig, convergeSig,
         isTopSig, hasDemandEnvSig,
@@ -1063,6 +1064,23 @@ cutCPRResult n (RetProd rs)    = RetProd (map (cutDmdResult (n-1)) rs)
     cutDmdResult n (Converges c) = Converges (cutCPRResult n c)
     cutDmdResult n (Dunno c)     = Dunno     (cutCPRResult n c)
 
+-- Forget the CPR information, but remember if it converges or diverges
+-- Used for non-strict thunks and non-top-level things with sum type
+forgetCPR :: DmdResult -> DmdResult
+forgetCPR (Converges _) = Converges NoCPR
+forgetCPR (Dunno _) = Dunno NoCPR
+forgetCPR res = res
+
+forgetSumCPR :: DmdResult -> DmdResult
+forgetSumCPR (Converges r) = Converges (forgetSumCPR_help r)
+forgetSumCPR (Dunno r) = Dunno (forgetSumCPR_help r)
+forgetSumCPR res = res
+
+forgetSumCPR_help :: CPRResult -> CPRResult
+forgetSumCPR_help (RetProd ds) = RetProd (map forgetSumCPR ds)
+forgetSumCPR_help (RetSum _)   = NoCPR
+forgetSumCPR_help NoCPR        = NoCPR
+
 vanillaCprProdRes :: Arity -> DmdResult
 vanillaCprProdRes arity = cprProdRes (replicate arity topRes)
 
@@ -1076,20 +1094,6 @@ isBotRes Diverges   = True
 isBotRes ThrowsExn  = True
 isBotRes (Dunno {}) = False
 isBotRes (Converges {}) = False
-
-trimCPRInfo :: Bool -> Bool -> DmdResult -> DmdResult
-trimCPRInfo trim_all trim_sums res
-  = trimR res
-  where
-    trimR (Converges c) = Converges (trimC c)
-    trimR (Dunno c) = Dunno (trimC c)
-    trimR res       = res
-
-    trimC (RetSum n)   | trim_all || trim_sums = NoCPR
-                       | otherwise             = RetSum n
-    trimC (RetProd rs) | trim_all  = NoCPR
-                       | otherwise = RetProd (map trimR rs)
-    trimC NoCPR = NoCPR
 
 returnsCPR_maybe :: DmdResult -> Maybe ConTag
 returnsCPR_maybe (Converges c) = retCPR_maybe c
