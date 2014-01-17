@@ -32,6 +32,13 @@ optimizationsOptions =
          , flagType = DynamicFlag
          , flagReverse = "-fno-cpr-anal"
          }
+  , flag { flagName = "-fcpr-depth=⟨n⟩"
+         , flagDescription =
+           "*default: 3.* Analyze the result of functions for constructed " ++
+            "product results to that depth. Setting this to zero disables " ++
+            "CPR, setting this to one disables nested CPR."
+         , flagType = DynamicFlag
+         }
   , flag { flagName = "-fcse"
          , flagDescription =
            "Enable common sub-expression elimination. Implied by :ghc-flag:`-O`."
