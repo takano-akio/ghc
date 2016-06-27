@@ -3556,6 +3556,7 @@ xFlagsDeps = [
   flagSpec "DeriveTraversable"                LangExt.DeriveTraversable,
   flagSpec "DisambiguateRecordFields"         LangExt.DisambiguateRecordFields,
   flagSpec "DoAndIfThenElse"                  LangExt.DoAndIfThenElse,
+  flagSpec "ArgumentDo"                       LangExt.ArgumentDo,
   depFlagSpec' "DoRec"                        LangExt.RecursiveDo
     (deprecatedForExtension "RecursiveDo"),
   flagSpec "DuplicateRecordFields"            LangExt.DuplicateRecordFields,

@@ -86,9 +86,9 @@ import Prelude
 import qualified GHC.LanguageExtensions as LangExt
 }
 
-%expect 36 -- shift/reduce conflicts
+%expect 191 -- shift/reduce conflicts
 
-{- Last updated: 9 Jan 2016
+{- Last updated: 8 Aug 2016
 
 If you modify this parser and add a conflict, please update this comment.
 You can learn more about the conflicts by passing 'happy' the -i flag:
@@ -138,12 +138,21 @@ state 50 contains 1 shift/reduce conflict.
 
 -------------------------------------------------------------------------------
 
-state 51 contains 9 shift/reduce conflicts.
+state 51 contains 41 shift/reduce conflicts.
 
     *** btype -> tyapps .
         tyapps -> tyapps . tyapp
 
-    Conflicts: ':' '-' '!' '.' '`' VARSYM CONSYM QVARSYM QCONSYM
+    Conflicts: '_' ':' '~' '!' '.' '`' '{' '[' '[:' '(' '(#' '`' SIMPLEQUOTE
+      VARID CONID VARSYM CONSYM QCONID QVARSYM QCONSYM
+      STRING INTEGER TH_ID_SPLICE '$(' TH_QUASIQUOTE TH_QQUASIQUOTE
+      and all the special ids.
+
+Example ambiguity:
+    'if x then y else z :: F a'
+
+Shift parses as (per longest-parse rule):
+    'if x then y else z :: (F a)'
 
 -------------------------------------------------------------------------------
 
@@ -172,7 +181,25 @@ Shift parses as (per longest-parse rule):
 
 -------------------------------------------------------------------------------
 
-state 295 contains 1 shift/reduce conflicts.
+state 136 contains 62 shift/reduce conflicts.
+
+    *** exp10 -> fexp .
+        fexp -> fexp . aexp
+        fexp -> fexp . TYPEAPP atype
+
+    Conflicts: TYPEAPP and all the tokens that can start an aexp
+
+Examples of ambiguity:
+    'if x then y else f z'
+    'if x then y else f @ z'
+
+Shift parses as (per longest-parse rule):
+    'if x then y else (f z)'
+    'if x then y else (f @ z)'
+
+-------------------------------------------------------------------------------
+
+state 294 contains 1 shift/reduce conflicts.
 
         rule -> STRING . rule_activation rule_forall infixexp '=' exp
 
@@ -190,7 +217,7 @@ a rule instructing how to rewrite the expression '[0] f'.
 
 -------------------------------------------------------------------------------
 
-state 304 contains 1 shift/reduce conflict.
+state 303 contains 1 shift/reduce conflict.
 
     *** type -> btype .
         type -> btype . '->' ctype
@@ -201,7 +228,7 @@ Same as state 50 but without contexts.
 
 -------------------------------------------------------------------------------
 
-state 340 contains 1 shift/reduce conflicts.
+state 339 contains 1 shift/reduce conflicts.
 
         tup_exprs -> commas . tup_tail
         sysdcon_nolist -> '(' commas . ')'
@@ -216,7 +243,7 @@ if -XTupleSections is not specified.
 
 -------------------------------------------------------------------------------
 
-state 391 contains 1 shift/reduce conflicts.
+state 390 contains 1 shift/reduce conflicts.
 
         tup_exprs -> commas . tup_tail
         sysdcon_nolist -> '(#' commas . '#)'
@@ -228,7 +255,17 @@ Same as State 324 for unboxed tuples.
 
 -------------------------------------------------------------------------------
 
-state 465 contains 1 shift/reduce conflict.
+state 401 contains 62 shift/reduce conflict.
+
+    *** exp10 -> '-' fexp .
+        fexp -> fexp . aexp
+        fexp -> fexp . TYPEAPP atype
+
+Same as 136 but with a unary minus.
+
+-------------------------------------------------------------------------------
+
+state 463 contains 1 shift/reduce conflict.
 
         oqtycon -> '(' qtyconsym . ')'
     *** qtyconop -> qtyconsym .
@@ -284,7 +321,7 @@ state 933 contains 1 shift/reduce conflicts.
 
 -------------------------------------------------------------------------------
 
-state 1269 contains 1 shift/reduce conflict.
+state 1272 contains 1 shift/reduce conflict.
 
     *** atype -> tyvar .
         tv_bndr -> '(' tyvar . '::' kind ')'
@@ -2165,59 +2202,15 @@ infixexp_top :: { LHsExpr RdrName }
                                   {% ams (sLL $1 $> (OpApp $1 $2 placeHolderFixity $3))
                                          [mj AnnVal $2] }
 
-exp10_top :: { LHsExpr RdrName }
-        : '\\' apat apats opt_asig '->' exp
-                   {% ams (sLL $1 $> $ HsLam (mkMatchGroup FromSource
-                            [sLL $1 $> $ Match { m_ctxt = LambdaExpr
-                                               , m_pats = $2:$3
-                                               , m_type = snd $4
-                                               , m_grhss = unguardedGRHSs $6 }]))
-                          (mj AnnLam $1:mu AnnRarrow $5:(fst $4)) }
 
-        | 'let' binds 'in' exp          {% ams (sLL $1 $> $ HsLet (snd $ unLoc $2) $4)
-                                               (mj AnnLet $1:mj AnnIn $3
-                                                 :(fst $ unLoc $2)) }
-        | '\\' 'lcase' altslist
-            {% ams (sLL $1 $> $ HsLamCase
-                                   (mkMatchGroup FromSource (snd $ unLoc $3)))
-                   (mj AnnLam $1:mj AnnCase $2:(fst $ unLoc $3)) }
-        | 'if' exp optSemi 'then' exp optSemi 'else' exp
-                           {% checkDoAndIfThenElse $2 (snd $3) $5 (snd $6) $8 >>
-                              ams (sLL $1 $> $ mkHsIf $2 $5 $8)
-                                  (mj AnnIf $1:mj AnnThen $4
-                                     :mj AnnElse $7
-                                     :(map (\l -> mj AnnSemi l) (fst $3))
-                                    ++(map (\l -> mj AnnSemi l) (fst $6))) }
-        | 'if' ifgdpats                 {% hintMultiWayIf (getLoc $1) >>
-                                           ams (sLL $1 $> $ HsMultiIf
-                                                     placeHolderType
-                                                     (reverse $ snd $ unLoc $2))
-                                               (mj AnnIf $1:(fst $ unLoc $2)) }
-        | 'case' exp 'of' altslist      {% ams (sLL $1 $> $ HsCase $2 (mkMatchGroup
-                                                   FromSource (snd $ unLoc $4)))
-                                               (mj AnnCase $1:mj AnnOf $3
-                                                  :(fst $ unLoc $4)) }
-        | '-' fexp                      {% ams (sLL $1 $> $ NegApp $2 noSyntaxExpr)
+exp10_top :: { LHsExpr RdrName }
+        : '-' fexp                      {% ams (sLL $1 $> $ NegApp $2 noSyntaxExpr)
                                                [mj AnnMinus $1] }
 
-        | 'do' stmtlist              {% ams (L (comb2 $1 $2)
-                                               (mkHsDo DoExpr (snd $ unLoc $2)))
-                                               (mj AnnDo $1:(fst $ unLoc $2)) }
-        | 'mdo' stmtlist            {% ams (L (comb2 $1 $2)
-                                              (mkHsDo MDoExpr (snd $ unLoc $2)))
-                                           (mj AnnMdo $1:(fst $ unLoc $2)) }
 
         | hpc_annot exp        {% ams (sLL $1 $> $ HsTickPragma (snd $ fst $ fst $ unLoc $1)
                                                                 (snd $ fst $ unLoc $1) (snd $ unLoc $1) $2)
                                       (fst $ fst $ fst $ unLoc $1) }
-
-        | 'proc' aexp '->' exp
-                       {% checkPattern empty $2 >>= \ p ->
-                           checkCommand $4 >>= \ cmd ->
-                           ams (sLL $1 $> $ HsProc p (sLL $1 $> $ HsCmdTop cmd placeHolderType
-                                                placeHolderType []))
-                                            -- TODO: is LL right here?
-                               [mj AnnProc $1,mu AnnRarrow $3] }
 
         | '{-# CORE' STRING '#-}' exp  {% ams (sLL $1 $> $ HsCoreAnn (getCORE_PRAGs $1) (getStringLiteral $2) $4)
                                               [mo $1,mj AnnVal $2
@@ -2269,9 +2262,12 @@ hpc_annot :: { Located ( (([AddAnn],SourceText),(StringLiteral,(Int,Int),(Int,In
                                                 )))
                                          }
 
+
 fexp    :: { LHsExpr RdrName }
-        : fexp aexp                  { sLL $1 $> $ HsApp $1 $2 }
-        | fexp TYPEAPP atype         {% ams (sLL $1 $> $ HsAppType $1 (mkHsWildCardBndrs $3))
+        : fexp aexp                  {% checkArgumentDo $1 >> checkArgumentDo $2 >>
+                                        return (sLL $1 $> $ (HsApp $1 $2)) }
+        | fexp TYPEAPP atype         {% checkArgumentDo $1 >>
+                                        ams (sLL $1 $> $ HsAppType $1 (mkHsWildCardBndrs $3))
                                             [mj AnnAt $2] }
         | 'static' aexp              {% ams (sLL $1 $> $ HsStatic placeHolderNames $2)
                                             [mj AnnStatic $1] }
@@ -2283,6 +2279,52 @@ aexp    :: { LHsExpr RdrName }
             -- Note [Lexing type applications] in Lexer.x
 
         | '~' aexp              {% ams (sLL $1 $> $ ELazyPat $2) [mj AnnTilde $1] }
+
+        | '\\' 'lcase' altslist
+                                     {% ams (sLL $1 $> $ HsLamCase
+                                                           (mkMatchGroup FromSource (snd $ unLoc $3)))
+                                           (mj AnnLam $1:mj AnnCase $2:(fst $ unLoc $3)) }
+        | 'do' stmtlist              {% ams (L (comb2 $1 $2)
+                                               (mkHsDo DoExpr (snd $ unLoc $2)))
+                                               (mj AnnDo $1:(fst $ unLoc $2)) }
+        | 'mdo' stmtlist            {% ams (L (comb2 $1 $2)
+                                              (mkHsDo MDoExpr (snd $ unLoc $2)))
+                                           (mj AnnMdo $1:(fst $ unLoc $2)) }
+        | 'case' exp 'of' altslist      {% ams (sLL $1 $> $ HsCase $2 (mkMatchGroup
+                                                   FromSource (snd $ unLoc $4)))
+                                               (mj AnnCase $1:mj AnnOf $3
+                                                  :(fst $ unLoc $4)) }
+
+        | '\\' apat apats opt_asig '->' exp
+                                     {% ams (sLL $1 $> $ HsLam (mkMatchGroup FromSource
+                                              [sLL $1 $> $ Match { m_ctxt = LambdaExpr
+                                                                 , m_pats = $2:$3
+                                                                 , m_type = snd $4
+                                                                 , m_grhss = unguardedGRHSs $6 }]))
+                                            (mj AnnLam $1:mu AnnRarrow $5:(fst $4)) }
+        | 'let' binds 'in' exp          {% ams (sLL $1 $> $ HsLet (snd $ unLoc $2) $4)
+                                               (mj AnnLet $1:mj AnnIn $3
+                                                 :(fst $ unLoc $2)) }
+        | 'if' exp optSemi 'then' exp optSemi 'else' exp
+                           {% checkDoAndIfThenElse $2 (snd $3) $5 (snd $6) $8 >>
+                              ams (sLL $1 $> $ mkHsIf $2 $5 $8)
+                                  (mj AnnIf $1:mj AnnThen $4
+                                     :mj AnnElse $7
+                                     :(map (\l -> mj AnnSemi l) (fst $3))
+                                    ++(map (\l -> mj AnnSemi l) (fst $6))) }
+        | 'if' ifgdpats                 {% hintMultiWayIf (getLoc $1) >>
+                                           ams (sLL $1 $> $ HsMultiIf
+                                                     placeHolderType
+                                                     (reverse $ snd $ unLoc $2))
+                                               (mj AnnIf $1:(fst $ unLoc $2)) }
+        | 'proc' aexp '->' exp
+                       {% checkPattern empty $2 >>= \ p ->
+                           checkCommand $4 >>= \ cmd ->
+                           ams (sLL $1 $> $ HsProc p (sLL $1 $> $ HsCmdTop cmd placeHolderType
+                                                placeHolderType []))
+                                            -- TODO: is LL right here?
+                               [mj AnnProc $1,mu AnnRarrow $3] }
+
         | aexp1                 { $1 }
 
 aexp1   :: { LHsExpr RdrName }

@@ -63,6 +63,7 @@ data Extension
    | GADTSyntax
    | NPlusKPatterns
    | DoAndIfThenElse
+   | ArgumentDo
    | RebindableSyntax
    | ConstraintKinds
    | PolyKinds                -- Kind polymorphism

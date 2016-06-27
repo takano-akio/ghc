@@ -40,6 +40,7 @@ module RdrHsSyn (
 
         -- Bunch of functions in the parser monad for
         -- checking and constructing values
+        checkArgumentDo,
         checkPrecP,           -- Int -> P Int
         checkContext,         -- HsType -> P HsContext
         checkPattern,         -- HsExp -> P HsPat
@@ -757,6 +758,35 @@ checkTyClHdr is_cls ty
     go l _  _  _
       = parseErrorSDoc l (text "Malformed head of type or class declaration:"
                           <+> ppr ty)
+
+-- | Yield a parse error if we have a function applied directly to a do block
+-- etc. and ArgumentDo is not enabled.
+checkArgumentDo :: LHsExpr RdrName -> P ()
+checkArgumentDo expr = do
+  pState <- getPState
+  if extopt LangExt.ArgumentDo (options pState)
+     then return ()
+     else case unLoc expr of
+        HsDo DoExpr _ _ -> parseErr "do block"
+        HsDo MDoExpr _ _ -> parseErr "mdo block"
+        HsLam {} -> parseErr "lambda expression"
+        HsCase {} -> parseErr "case expression"
+        HsLamCase {} -> parseErr "lambda-case expression"
+        HsLet {} -> parseErr "let expression"
+        HsIf {} -> parseErr "if expression"
+        HsProc {} -> parseErr "proc expression"
+        _ -> return ()
+  where
+    parseErr element =
+      let txt = text "Unexpected " <>
+                text element <>
+                text " in function application:"
+                $$ nest 4 (ppr expr)
+      in
+      parseErrorSDoc (getLoc expr)
+                     (txt
+                   $$ text "You could write it with parentheses"
+                   $$ text "Or perhaps you meant to enable ArgumentDo?")
 
 checkContext :: LHsType RdrName -> P ([AddAnn],LHsContext RdrName)
 checkContext (L l orig_t)
