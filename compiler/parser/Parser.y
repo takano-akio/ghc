@@ -237,7 +237,10 @@ state 477 contains 1 shift/reduce conflict.
 
     Conflict: ')'
 
-TODO: Why?
+Example ambiguity: 'foo :: (:%)'
+
+Shift means '(:%)' gets parsed as a type constructor, rather than than a
+parenthesized infix type expression of length 1.
 
 -------------------------------------------------------------------------------
 
@@ -290,7 +293,18 @@ state 1303 contains 1 shift/reduce conflict.
 
     Conflict: '::'
 
-TODO: Why?
+Example ambiguity: 'class C a where type D a = ( a :: * ...'
+
+Here the parser cannot tell whether this is specifying a default for the
+associated type like:
+
+'class C a where type D a = ( a :: * ); type D a'
+
+or it is an injectivity signature like:
+
+'class C a where type D a = ( r :: * ) | r -> a'
+
+Shift means the parser only allows the latter.
 
 -------------------------------------------------------------------------------
 -- API Annotations
