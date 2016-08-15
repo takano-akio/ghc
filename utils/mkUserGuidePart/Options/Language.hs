@@ -53,6 +53,14 @@ languageOptions =
          , flagReverse = "-XNoAllowAmbiguousTypes"
          , flagSince = "7.8.1"
          }
+  , flag { flagName = "-XArgumentDo"
+         , flagDescription =
+           "Allow :ref:`do blocks and other constructs as function " ++
+           "arguments <argument-do>`"
+         , flagType = DynamicFlag
+         , flagReverse = "-XNoArgumentDo"
+         , flagSince = "8.2.1"
+         }
   , flag { flagName = "-XArrows"
          , flagDescription =
            "Enable :ref:`arrow notation <arrow-notation>` extension"
