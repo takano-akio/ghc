@@ -113,3 +113,4 @@ test('DumpTypecheckedAst', normal, compile, ['-dsuppress-uniques -ddump-tc-ast']
 test('T13747', normal, compile, [''])
 test('T14189',     normal, compile, ['-dsuppress-uniques -ddump-rn-ast'])
 test('T13986', normal, compile, [''])
+test('T10855', normal, compile, [''])
