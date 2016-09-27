@@ -48,6 +48,7 @@ import SMRep
 import Bitmap
 import OrdList
 import Maybes
+import VarEnv
 
 import Data.List
 import Foreign
@@ -60,6 +61,7 @@ import Control.Arrow ( second )
 
 import Control.Exception
 import Data.Array
+import Data.ByteString (ByteString)
 import Data.Map (Map)
 import Data.IntMap (IntMap)
 import qualified Data.Map as Map
@@ -81,12 +83,19 @@ byteCodeGen hsc_env this_mod binds tycs mb_modBreaks
    = withTiming (pure dflags)
                 (text "ByteCodeGen"<+>brackets (ppr this_mod))
                 (const ()) $ do
-        let flatBinds = [ (bndr, simpleFreeVars rhs)
-                        | (bndr, rhs) <- flattenBinds binds]
+        -- In order to avoid having to deal with top-level string literals
+        -- in subsequent parts of the pipeline, we separate them out here and
+        -- inline them.
+        let (strings, flatBinds) = splitEithers $ do
+                (bndr, rhs) <- flattenBinds binds
+                return $ case rhs of
+                    Lit (MachStr str) -> Left (bndr, str)
+                    _ -> Right (bndr, simpleFreeVars rhs)
+        let stringEnv = extendVarEnvList emptyVarEnv strings
 
         us <- mkSplitUniqSupply 'y'
         (BcM_State{..}, proto_bcos) <-
-           runBc hsc_env us this_mod mb_modBreaks $
+           runBc hsc_env us this_mod mb_modBreaks stringEnv $
              mapM schemeTopBind flatBinds
 
         when (notNull ffis)
@@ -132,8 +141,8 @@ coreExprToBCOs hsc_env this_mod expr
       -- the uniques are needed to generate fresh variables when we introduce new
       -- let bindings for ticked expressions
       us <- mkSplitUniqSupply 'y'
-      (BcM_State _dflags _us _this_mod _final_ctr mallocd _ _ , proto_bco)
-         <- runBc hsc_env us this_mod Nothing $
+      (BcM_State _dflags _us _this_mod _final_ctr mallocd _ _ _, proto_bco)
+         <- runBc hsc_env us this_mod Nothing emptyVarEnv $
               schemeTopBind (invented_id, simpleFreeVars expr)
 
       when (notNull mallocd)
@@ -1355,11 +1364,15 @@ pushAtom d p (AnnVar v)
          -- slots on to the top of the stack.
 
    | otherwise  -- v must be a global variable
-   = do dflags <- getDynFlags
-        let sz :: Word16
-            sz = fromIntegral (idSizeW dflags v)
-        MASSERT(sz == 1)
-        return (unitOL (PUSH_G (getName v)), sz)
+   = do topStrings <- getTopStrings
+        case lookupVarEnv topStrings v of
+            Just str -> pushAtom d p $ AnnLit $ MachStr str
+            Nothing -> do
+                dflags <- getDynFlags
+                let sz :: Word16
+                    sz = fromIntegral (idSizeW dflags v)
+                MASSERT(sz == 1)
+                return (unitOL (PUSH_G (getName v)), sz)
 
 
 pushAtom _ _ (AnnLit lit) = do
@@ -1659,6 +1672,7 @@ data BcM_State
                                          -- Should be free()d when it is GCd
         , modBreaks   :: Maybe ModBreaks -- info about breakpoints
         , breakInfo   :: IntMap CgBreakInfo
+        , topStrings  :: IdEnv ByteString -- top-level string literals
         }
 
 newtype BcM r = BcM (BcM_State -> IO (BcM_State, r))
@@ -1668,10 +1682,11 @@ ioToBc io = BcM $ \st -> do
   x <- io
   return (st, x)
 
-runBc :: HscEnv -> UniqSupply -> Module -> Maybe ModBreaks -> BcM r
+runBc :: HscEnv -> UniqSupply -> Module -> Maybe ModBreaks -> IdEnv ByteString
+      -> BcM r
       -> IO (BcM_State, r)
-runBc hsc_env us this_mod modBreaks (BcM m)
-   = m (BcM_State hsc_env us this_mod 0 [] modBreaks IntMap.empty)
+runBc hsc_env us this_mod modBreaks topStrings (BcM m)
+   = m (BcM_State hsc_env us this_mod 0 [] modBreaks IntMap.empty topStrings)
 
 thenBc :: BcM a -> (a -> BcM b) -> BcM b
 thenBc (BcM expr) cont = BcM $ \st0 -> do
@@ -1745,6 +1760,9 @@ newUnique = BcM $
 
 getCurrentModule :: BcM Module
 getCurrentModule = BcM $ \st -> return (st, thisModule st)
+
+getTopStrings :: BcM (IdEnv ByteString)
+getTopStrings = BcM $ \st -> return (st, topStrings st)
 
 newId :: Type -> BcM Id
 newId ty = do
