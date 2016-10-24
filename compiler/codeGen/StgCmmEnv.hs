@@ -133,7 +133,7 @@ getCgIdInfo id
                       | isUnliftedType (idType id) =
                           -- An unlifted external Id must refer to a top-level
                           -- string literal.
-                          ASSERT (idType id `eqType` addrPrimTy)
+                          ASSERT( idType id `eqType` addrPrimTy )
                           mkBytesLabel name
                       | otherwise = mkClosureLabel name $ idCafInfo id
               in return $
