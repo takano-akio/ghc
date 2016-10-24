@@ -136,7 +136,7 @@ cgTopBinding dflags (StgTopLifted (StgRec pairs))
 
 cgTopBinding dflags (StgTopStringLit id str)
   = do  { id' <- maybeExternaliseId dflags id
-        ; let label = mkClosureLabel (idName id') (idCafInfo id)
+        ; let label = mkBytesLabel (idName id')
         ; let (lit, decl) = mkByteStringCLit label (BS.unpack str)
         ; emitDecl decl
         ; addBindC (litIdInfo dflags id' mkLFStringLit lit)

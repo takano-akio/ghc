@@ -28,6 +28,7 @@ module CLabel (
         mkApEntryLabel,
         mkApInfoTableLabel,
         mkClosureTableLabel,
+        mkBytesLabel,
 
         mkLocalClosureLabel,
         mkLocalInfoTableLabel,
@@ -395,6 +396,8 @@ data IdLabelInfo
 
   | ClosureTable        -- ^ Table of closures for Enum tycons
 
+  | Bytes               -- ^ User data
+
   deriving (Eq, Ord)
 
 
@@ -483,6 +486,7 @@ mkLocalStaticInfoTableLabel :: CafInfo -> Name -> CLabel
 mkLocalStaticConEntryLabel  :: CafInfo -> Name -> CLabel
 mkConInfoTableLabel         :: Name -> CafInfo -> CLabel
 mkStaticInfoTableLabel      :: Name -> CafInfo -> CLabel
+mkBytesLabel                :: Name -> CLabel
 mkClosureLabel name         c     = IdLabel name c Closure
 mkInfoTableLabel name       c     = IdLabel name c InfoTable
 mkEntryLabel name           c     = IdLabel name c Entry
@@ -493,6 +497,7 @@ mkLocalStaticInfoTableLabel c con = IdLabel con c StaticInfoTable
 mkLocalStaticConEntryLabel  c con = IdLabel con c StaticConEntry
 mkConInfoTableLabel name    c     = IdLabel name c ConInfoTable
 mkStaticInfoTableLabel name c     = IdLabel name c StaticInfoTable
+mkBytesLabel name                 = IdLabel name NoCafRefs Bytes
 
 mkConEntryLabel       :: Name -> CafInfo -> CLabel
 mkStaticConEntryLabel :: Name -> CafInfo -> CLabel
@@ -947,6 +952,7 @@ idInfoLabelType info =
     StaticInfoTable -> DataLabel
     ClosureTable  -> DataLabel
     RednCounts    -> DataLabel
+    Bytes         -> DataLabel
     _             -> CodeLabel
 
 
@@ -1242,6 +1248,7 @@ ppIdFlavor x = pp_cSEP <>
                        StaticConEntry   -> text "static_entry"
                        StaticInfoTable  -> text "static_info"
                        ClosureTable     -> text "closure_tbl"
+                       Bytes            -> text "bytes"
                       )
 
 
