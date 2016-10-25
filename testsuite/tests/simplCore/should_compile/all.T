@@ -245,3 +245,8 @@ test('T12212', normal, compile, ['-O'])
 
 test('noinline01', only_ways(['optasm']), compile, ['-ddump-stg -dsuppress-uniques -O'])
 test('par01', only_ways(['optasm']), compile, ['-ddump-prep -dsuppress-uniques -O2'])
+
+test('str-rules',
+     normal,
+     run_command,
+     ['$MAKE -s --no-print-directory str-rules'])

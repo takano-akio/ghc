@@ -154,3 +154,8 @@ T5615:
 	-grep 'quotInt#' T5615.dump-simpl
 	-grep 'remInt#' T5615.dump-simpl
 	grep -c '1999#' T5615.dump-simpl
+
+.PHONY: str-rules
+str-rules:
+	$(RM) -f str-rules.hi str-rules.o
+	'$(TEST_HC)' $(TEST_HC_OPTS) -c -O str-rules.hs -ddump-simpl | grep -o '"@@@[^"].*"#' | sort
