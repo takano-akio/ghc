@@ -431,7 +431,8 @@ unitFloat bind = Floats (unitOL bind) (flag bind)
     flag (Rec {})                = FltLifted
     flag (NonRec bndr rhs)
       | not (isStrictId bndr)    = FltLifted
-      | Lit (MachStr _) <- rhs   = FltLifted  -- String literals can be floated freely
+      | Lit (MachStr _) <- rhs   = FltLifted
+          -- String literals can be floated freely
       | exprOkForSpeculation rhs = FltOkSpec  -- Unlifted, and lifted but ok-for-spec (eg HNF)
       | otherwise                = ASSERT2( not (isUnliftedType (idType bndr)), ppr bndr )
                                    FltCareful
