@@ -396,7 +396,8 @@ data IdLabelInfo
 
   | ClosureTable        -- ^ Table of closures for Enum tycons
 
-  | Bytes               -- ^ User data
+  | Bytes               -- ^ Content of a string literal. See
+                        -- Note [Bytes label].
 
   deriving (Eq, Ord)
 
@@ -1072,6 +1073,11 @@ export this because in other modules we either have
        * A saturated call 'Just x'; allocate using Just_con_info
 Not exporting these Just_info labels reduces the number of symbols
 somewhat.
+
+Note [Bytes label]
+~~~~~~~~~~~~~~~~~~
+For a top-level string literal 'foo', we have just one symbol 'foo_bytes', which
+points to a static data block containing the content of the literal.
 -}
 
 instance Outputable CLabel where
