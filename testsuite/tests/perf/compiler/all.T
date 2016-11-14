@@ -52,6 +52,7 @@ test('T1969',
              # 2015-06-03 41, (amd64/Linux) use +RTS -G1
              # 2015-10-28 55, (amd64/Linux) emit Typeable at definition site
              # 2016-10-20 68, (amd64/Linux) allow top-level string literals
+             #                See the comment 16 on #8472.
       compiler_stats_num_field('max_bytes_used',
           [(platform('i386-unknown-mingw32'), 5719436, 20),
                                  # 2010-05-17 5717704 (x86/Windows)
@@ -821,7 +822,8 @@ test('T10370',
           #     affected stats on bootstrapped GHC.  However,
           #     when I set -i0.01 with profiling, the heap profiles
           #     were identical, so I think it's just GC noise.
-          # 2016-10-20    38221184   Allow top-level string literals
+          # 2016-10-20    38221184   Allow top-level string literals.
+          #                          See the comment 16 on #8472.
            (wordsize(32), 11371496, 15),
           # 2015-10-22    11371496
           ]),
