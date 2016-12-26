@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP, MagicHash, RecordWildCards #-}
+{-# LANGUAGE CPP, MagicHash, RecordWildCards, BangPatterns #-}
 {-# OPTIONS_GHC -fprof-auto-top #-}
 --
 --  (c) The University of Glasgow 2002-2006
@@ -91,11 +91,11 @@ byteCodeGen hsc_env this_mod binds tycs mb_modBreaks
                 return $ case rhs of
                     Lit (MachStr str) -> Left (bndr, str)
                     _ -> Right (bndr, simpleFreeVars rhs)
-        let stringEnv = extendVarEnvList emptyVarEnv strings
+        stringPtrs <- allocateTopStrings hsc_env strings
 
         us <- mkSplitUniqSupply 'y'
         (BcM_State{..}, proto_bcos) <-
-           runBc hsc_env us this_mod mb_modBreaks stringEnv $
+           runBc hsc_env us this_mod mb_modBreaks (mkVarEnv stringPtrs) $
              mapM schemeTopBind flatBinds
 
         when (notNull ffis)
@@ -104,7 +104,7 @@ byteCodeGen hsc_env this_mod binds tycs mb_modBreaks
         dumpIfSet_dyn dflags Opt_D_dump_BCOs
            "Proto-BCOs" (vcat (intersperse (char ' ') (map ppr proto_bcos)))
 
-        cbc <- assembleBCOs hsc_env proto_bcos tycs
+        cbc <- assembleBCOs hsc_env proto_bcos tycs (map snd stringPtrs)
           (case modBreaks of
              Nothing -> Nothing
              Just mb -> Just mb{ modBreaks_breakInfo = breakInfo })
@@ -120,6 +120,15 @@ byteCodeGen hsc_env this_mod binds tycs mb_modBreaks
         return cbc
 
   where dflags = hsc_dflags hsc_env
+
+allocateTopStrings
+  :: HscEnv
+  -> [(Id, ByteString)]
+  -> IO [(Var, RemotePtr ())]
+allocateTopStrings hsc_env topStrings = do
+  let !(bndrs, strings) = unzip topStrings
+  ptrs <- iservCmd hsc_env $ MallocStrings strings
+  return $ zip bndrs ptrs
 
 -- -----------------------------------------------------------------------------
 -- Generating byte code for an expression
@@ -1366,7 +1375,8 @@ pushAtom d p (AnnVar v)
    | otherwise  -- v must be a global variable
    = do topStrings <- getTopStrings
         case lookupVarEnv topStrings v of
-            Just str -> pushAtom d p $ AnnLit $ MachStr str
+            Just ptr -> pushAtom d p $ AnnLit $ MachWord $ fromIntegral $
+              ptrToWordPtr $ fromRemotePtr ptr
             Nothing -> do
                 dflags <- getDynFlags
                 let sz :: Word16
@@ -1672,7 +1682,7 @@ data BcM_State
                                          -- Should be free()d when it is GCd
         , modBreaks   :: Maybe ModBreaks -- info about breakpoints
         , breakInfo   :: IntMap CgBreakInfo
-        , topStrings  :: IdEnv ByteString -- top-level string literals
+        , topStrings  :: IdEnv (RemotePtr ()) -- top-level string literals
         }
 
 newtype BcM r = BcM (BcM_State -> IO (BcM_State, r))
@@ -1682,7 +1692,8 @@ ioToBc io = BcM $ \st -> do
   x <- io
   return (st, x)
 
-runBc :: HscEnv -> UniqSupply -> Module -> Maybe ModBreaks -> IdEnv ByteString
+runBc :: HscEnv -> UniqSupply -> Module -> Maybe ModBreaks
+      -> IdEnv (RemotePtr ())
       -> BcM r
       -> IO (BcM_State, r)
 runBc hsc_env us this_mod modBreaks topStrings (BcM m)
@@ -1761,7 +1772,7 @@ newUnique = BcM $
 getCurrentModule :: BcM Module
 getCurrentModule = BcM $ \st -> return (st, thisModule st)
 
-getTopStrings :: BcM (IdEnv ByteString)
+getTopStrings :: BcM (IdEnv (RemotePtr ()))
 getTopStrings = BcM $ \st -> return (st, topStrings st)
 
 newId :: Type -> BcM Id
