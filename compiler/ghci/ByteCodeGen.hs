@@ -83,9 +83,8 @@ byteCodeGen hsc_env this_mod binds tycs mb_modBreaks
    = withTiming (pure dflags)
                 (text "ByteCodeGen"<+>brackets (ppr this_mod))
                 (const ()) $ do
-        -- In order to avoid having to deal with top-level string literals
-        -- in subsequent parts of the pipeline, we separate them out here and
-        -- inline them.
+        -- Split top-level binds into strings and others.
+        -- See Note [generating code for top-level string literal bindings].
         let (strings, flatBinds) = splitEithers $ do
                 (bndr, rhs) <- flattenBinds binds
                 return $ case rhs of
@@ -129,6 +128,20 @@ allocateTopStrings hsc_env topStrings = do
   let !(bndrs, strings) = unzip topStrings
   ptrs <- iservCmd hsc_env $ MallocStrings strings
   return $ zip bndrs ptrs
+
+{-
+Note [generating code for top-level string literal bindings]
+
+Here is a summary on how the byte code generator deals with top-level string
+literals:
+
+1. Top-level string literal bindings are spearted from the rest of the module.
+
+2. The strings are allocated via iservCmd, in allocateTopStrings
+
+3. The mapping from binders to allocated strings (topStrings) are maintained in
+   BcM and used when generating code for variable references.
+-}
 
 -- -----------------------------------------------------------------------------
 -- Generating byte code for an expression
@@ -1683,6 +1696,7 @@ data BcM_State
         , modBreaks   :: Maybe ModBreaks -- info about breakpoints
         , breakInfo   :: IntMap CgBreakInfo
         , topStrings  :: IdEnv (RemotePtr ()) -- top-level string literals
+          -- See Note [generating code for top-level string literal bindings].
         }
 
 newtype BcM r = BcM (BcM_State -> IO (BcM_State, r))

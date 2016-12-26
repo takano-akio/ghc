@@ -133,10 +133,32 @@ deserialising it from an interface file (see the Binary instance
 below), we don't have convenient access to the mkInteger Id.  So we
 just use an error thunk, and fill in the real Id when we do tcIfaceLit
 in TcIface.
-
-
-Binary instance
 -}
+
+{-
+Note [Compilation plan for top-level string literals]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Unlike other literals, duplicating string literals is not free in terms of the
+size of the resulting executable. For this reason, we allow top-level bindings
+that binds variables to string literals.
+
+* In the source language, there is no way to bind a primitive string literal
+  at the top leve.
+
+* In Core, we have a special rule that permits top-level Addr# bindings. See
+  Note [CoreSyn top-level string literals] in CoreSyn.hs. Core-to-core passes
+  may float string literals to the top level.
+
+* In STG, top-level string literals are explicitly represented in the syntax
+  tree.
+
+* A top-level string literal may end up exported from a module. In the object
+  file, the content of the exported literal is given a label with the _bytes
+  suffix.
+-}
+
+
+-- Binary instance
 
 instance Binary Literal where
     put_ bh (MachChar aa)     = do putByte bh 0; put_ bh aa

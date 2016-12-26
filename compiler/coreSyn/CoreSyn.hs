@@ -374,6 +374,27 @@ arbitrary unlifted expression at the top-level though, unlifted binders cannot
 be thunks, so we just allow string literals and other variables of type Addr#.
 Allowing the latter makes it easier for CSE to deal with those bindings.
 
+Also see Note [Compilation plan for top-level string literals].
+
+Note [Compilation plan for top-level string literals]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Here is a summary on how top-level string literals are handled by various
+parts of the compilation pipeline.
+
+* In the source language, there is no way to bind a primitive string literal
+  at the top leve.
+
+* In Core, we have a special rule that permits top-level Addr# bindings. See
+  Note [CoreSyn top-level string literals]. Core-to-core passes may introduce
+  new top-level string literals.
+
+* In STG, top-level string literals are explicitly represented in the syntax
+  tree.
+
+* A top-level string literal may end up exported from a module. In this case,
+  in the object file, the content of the exported literal is given a label with
+  the _bytes suffix.
+
 Note [CoreSyn let/app invariant]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 The let/app invariant

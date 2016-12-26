@@ -634,6 +634,8 @@ We want to turn this into:
    foo1 = "blob"#
    foo = Ptr foo1
 
+See Note [CoreSyn top-level string literals] in CoreSyn.
+
 ************************************************************************
 *                                                                      *
 \subsection{Completing a lazy binding}
