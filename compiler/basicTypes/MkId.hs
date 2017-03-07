@@ -703,6 +703,9 @@ dataConSrcToImplBang dflags fam_envs arg_ty
       Nothing     -> HsUnpack Nothing
       Just (co,_) -> HsUnpack (Just co)
 
+  | isUnliftedType arg_ty
+  = HsLazy
+
   | otherwise -- Record the strict-but-no-unpack decision
   = HsStrict
 
